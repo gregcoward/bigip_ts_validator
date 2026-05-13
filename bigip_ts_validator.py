@@ -81,6 +81,19 @@ def _install_task_failed_because_already_installed(error_message: str, task_payl
     )
 
 
+def _provision_patch_busy_response(status_code: int, body: str) -> bool:
+    """True when TMOS rejects PATCH because another provisioning job is still running (01071003)."""
+    if status_code != 400:
+        return False
+    t = body.lower()
+    return (
+        "01071003" in body
+        or "provisioning operation is in progress" in t
+        or "previous provisioning operation is in progress" in t
+        or "try again when the bigip is active" in t
+    )
+
+
 def _extension_info_with_settle(
     client: BigIPClient,
     name: str,
@@ -155,18 +168,44 @@ class BigIPClient:
             out[name] = str(it.get("level", "none")).lower().strip()
         return out
 
-    def patch_provision_level(self, module: str, level: str = "nominal") -> dict:
-        """PATCH a single module to the given provision level (default nominal)."""
+    def patch_provision_level(
+        self,
+        module: str,
+        level: str = "nominal",
+        *,
+        busy_poll: float = 10.0,
+        busy_timeout: int = 360,
+    ) -> dict:
+        """PATCH a single module to the given provision level (default nominal).
+
+        Retries on **400 / 01071003** when another provisioning operation is still
+        active, which is common when enabling several modules in one remediation.
+        """
         mod = module.lower().strip()
-        resp = self._patch(f"/mgmt/tm/sys/provision/{mod}", {"level": level})
-        if resp.status_code not in (200, 202):
+        deadline = time.time() + busy_timeout
+        last_body = ""
+        while time.time() < deadline:
+            resp = self._patch(f"/mgmt/tm/sys/provision/{mod}", {"level": level})
+            if resp.status_code in (200, 202):
+                try:
+                    return resp.json() if resp.text.strip() else {}
+                except json.JSONDecodeError:
+                    return {}
+            last_body = resp.text or ""
+            if _provision_patch_busy_response(resp.status_code, last_body):
+                time.sleep(busy_poll)
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                continue
             raise BigIPError(
-                f"Provisioning PATCH for {mod} failed ({resp.status_code}): {resp.text[:800]}"
+                f"Provisioning PATCH for {mod} failed ({resp.status_code}): {last_body[:800]}"
             )
-        try:
-            return resp.json() if resp.text.strip() else {}
-        except json.JSONDecodeError:
-            return {}
+        raise BigIPError(
+            f"Provisioning PATCH for {mod} timed out after {busy_timeout}s waiting for prior "
+            f"provisioning to finish (last response): {last_body[:800]}"
+        )
 
     def wait_asm_policy_api_ready(self, timeout: int = 300, interval: float = 5.0) -> None:
         """Wait until ASM policy REST is usable on the management API.
@@ -556,22 +595,26 @@ def ensure_modules_provisioned(
     level: str = "nominal",
     wait_timeout: int = 300,
 ) -> list[str]:
-    """PATCH any listed module that is at level ``none``; wait for REST. Returns slugs PATCHed."""
+    """PATCH any listed module that is at level ``none``; wait for REST. Returns slugs PATCHed.
+
+    Modules are processed **one at a time**: after each PATCH the device must
+    finish that provisioning step before the next, or TMOS returns **01071003**
+    (provisioning already in progress).
+    """
     modules = [m.lower().strip() for m in modules if m.strip()]
     if not modules:
         return []
-    try:
-        levels = client.provision_query()
-    except BigIPError as exc:
-        raise BigIPError(f"Cannot read provisioning state before PATCH: {exc}") from exc
     patched: list[str] = []
     for m in modules:
+        try:
+            levels = client.provision_query()
+        except BigIPError as exc:
+            raise BigIPError(f"Cannot read provisioning state before PATCH: {exc}") from exc
         cur = levels.get(m, "none")
         if cur in ("none", ""):
-            client.patch_provision_level(m, level=level)
+            client.patch_provision_level(m, level=level, busy_timeout=max(360, wait_timeout))
             patched.append(m)
-    if patched:
-        client.wait_provision_and_rest(patched, timeout=wait_timeout)
+            client.wait_provision_and_rest([m], timeout=wait_timeout)
     return patched
 
 

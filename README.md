@@ -474,6 +474,13 @@ Mitigations:
   `{"level": "nominal"}`). Provisioning causes a short REST/TMM restart and may
   exceed CPU/RAM on small vBIG-IPs.
 
+**Provisioning 400 / 01071003 (“previous provisioning operation is in progress”):**
+TMOS applies one module change at a time. Remediation **PATCHes each required
+module in sequence**, **waits** for that module to finish provisioning before the
+next, and each PATCH **retries** (with backoff) while the device reports a busy
+state. If you still see this after other admin activity, wait until the BIG-IP
+finishes its current provisioning cycle, then run **validate + remediate** again.
+
 **ASM and AS3 422 (`localhost:8100`, `Connection refused`):** after provisioning
 ASM (or other restarts), AS3 may still return **422** while it queries
 `/mgmt/tm/asm/policies` through an on-box listener (often **localhost:8100**)
