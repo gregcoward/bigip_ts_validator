@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded iControl LX RPMs cached by --install-prereqs
+rpms/
+
+# Local Claude Code session state (but keep checked-in agent definitions)
+.claude/*
+!.claude/agents/
+!.claude/agents/**

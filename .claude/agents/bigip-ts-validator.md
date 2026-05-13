@@ -38,7 +38,22 @@ Collect these before doing anything. If any are missing, ask once, concisely:
    - Which required `/Common/Shared` resources are present vs missing?
    - Is the expected `Telemetry_Consumer` type configured on the TS declaration?
    - Overall: READY or NOT READY.
-4. If NOT READY and the user wants remediation:
+4. If the AS3 or TS iControl LX **extensions** themselves are missing, the
+   AS3-based remediation in step 5 cannot run. Offer to install them from
+   F5's GitHub releases first (RPMs cached under `./rpms/`):
+   - Confirm with the user (and surface the versions that will be installed —
+     by default the script resolves `latest`; pinning is possible with
+     `--as3-version` / `--ts-version`).
+   - Re-run with:
+     ```
+     python3 bigip_ts_validator.py \
+         --host <host> --username <user> --consumer <consumer> \
+         --install-prereqs
+     ```
+     The script downloads the `.noarch.rpm` assets, chunk-uploads them, and
+     installs via `/mgmt/shared/iapp/package-management-tasks`, then waits for
+     each extension's `/info` endpoint to return.
+5. If NOT READY and the user wants AS3 remediation:
    - Show them the AS3 file you will apply (default
      `examples/as3-telemetry-resources.json`) and the host it targets.
    - **Get explicit confirmation in the chat before mutating the device.**
@@ -47,8 +62,10 @@ Collect these before doing anything. If any are missing, ask once, concisely:
      python3 bigip_ts_validator.py \
          --host <host> --username <user> --consumer <consumer> --yes
      ```
+     (Add `--install-prereqs` here as well if extensions are also missing —
+     the script will install them, then re-validate, then apply AS3.)
    - Report the post-remediation status.
-5. If READY, stop and tell the user the device is provisioned.
+6. If READY, stop and tell the user the device is provisioned.
 
 ## Notes on what is validated
 
@@ -74,5 +91,5 @@ It also calls `/mgmt/shared/telemetry/declare` and walks the result for any
   than guessing. The TS declaration must match the consumer they actually
   intend to send data to.
 - The script's exit code is meaningful: 0 = ready, 1 = not ready,
-  2 = configuration/auth error, 3 = AS3 apply failed. Surface failures
-  rather than swallowing them.
+  2 = configuration/auth error, 3 = AS3 apply failed, 4 = extension install
+  failed. Surface failures rather than swallowing them.
