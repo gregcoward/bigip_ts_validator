@@ -14,7 +14,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from as3_services import build_as3_declaration
-from bigip_ts_validator import BigIPClient, BigIPError, ensure_extensions, validate
+from bigip_ts_validator import (
+    BigIPClient,
+    BigIPError,
+    ensure_extensions,
+    ensure_modules_provisioned,
+    modules_required_for_services,
+    validate,
+)
 from ts_declaration_builder import build_ts_declaration, normalize_consumer_type
 
 SESSION_TTL_SEC = 45 * 60
@@ -76,7 +83,8 @@ class RemediateBody(BaseModel):
     include_system_poller: bool = True
     as3_version: str | None = None
     ts_version: str | None = None
-    assume_yes: bool = True
+    provision_modules: bool = False
+    provision_level: str = Field(default="nominal", description="TMOS provision level (usually nominal)")
 
 
 app = FastAPI(title="BIG-IP Telemetry Streaming helper", version="1.0.0")
@@ -136,6 +144,27 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             steps.append({"step": "install_extensions", "installed": installed})
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.provision_modules:
+        needed = list(modules_required_for_services(svc).keys())
+        if needed:
+            try:
+                patched = ensure_modules_provisioned(
+                    s.client,
+                    needed,
+                    level=body.provision_level,
+                    wait_timeout=300,
+                )
+                steps.append(
+                    {
+                        "step": "provision_modules",
+                        "modules": needed,
+                        "patched": patched,
+                        "level": body.provision_level,
+                    }
+                )
+            except BigIPError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if body.apply_as3:
         try:

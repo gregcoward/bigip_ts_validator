@@ -158,8 +158,9 @@ The repository includes a small browser UI to connect to a BIG-IP, pick which
 logging and analytics profiles to create (LTM, ASM, AFM, HTTP Analytics, TCP
 Analytics), choose a [Telemetry Streaming push consumer](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html),
 fill in consumer-specific parameters (HEC token, workspace keys, and so on),
-validate readiness, and optionally install extensions, POST the filtered AS3
-declaration, and POST a composed TS declaration.
+validate readiness, and optionally install extensions, **provision TMOS modules**
+(AVR when HTTP/TCP analytics are selected, ASM/AFM when those sources are selected),
+POST the filtered AS3 declaration, and POST a composed TS declaration.
 
 **Security model:** the BIG-IP password is sent once to this application's Python
 process over HTTPS to your workstation. It is kept only in an in-memory session

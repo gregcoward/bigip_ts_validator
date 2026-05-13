@@ -95,6 +95,82 @@ class BigIPClient:
     def _post(self, path: str, body: Any) -> requests.Response:
         return self.session.post(f"{self.base_url}{path}", json=body, timeout=self.timeout)
 
+    def _patch(self, path: str, body: Any) -> requests.Response:
+        return self.session.patch(f"{self.base_url}{path}", json=body, timeout=self.timeout)
+
+    def provision_query(self) -> dict[str, str]:
+        """Return TMOS module slug (lowercase) -> provision level (lowercase)."""
+        resp = self._get("/mgmt/tm/sys/provision")
+        if resp.status_code != 200:
+            raise BigIPError(f"Could not read /mgmt/tm/sys/provision ({resp.status_code}): {resp.text[:500]}")
+        data = resp.json()
+        out: dict[str, str] = {}
+        for it in data.get("items", []):
+            name = str(it.get("name", "")).lower().strip()
+            if not name:
+                continue
+            out[name] = str(it.get("level", "none")).lower().strip()
+        return out
+
+    def patch_provision_level(self, module: str, level: str = "nominal") -> dict:
+        """PATCH a single module to the given provision level (default nominal)."""
+        mod = module.lower().strip()
+        resp = self._patch(f"/mgmt/tm/sys/provision/{mod}", {"level": level})
+        if resp.status_code not in (200, 202):
+            raise BigIPError(
+                f"Provisioning PATCH for {mod} failed ({resp.status_code}): {resp.text[:800]}"
+            )
+        try:
+            return resp.json() if resp.text.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def wait_provision_and_rest(self, modules: list[str], timeout: int = 300) -> None:
+        """Wait until provisioned modules leave ``none``, then allow REST to settle."""
+        want = {m.lower().strip() for m in modules if m.strip()}
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                levels = self.provision_query()
+            except (BigIPError, requests.RequestException):
+                time.sleep(5)
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                continue
+            if want and any(levels.get(m, "none") in ("none", "") for m in want):
+                time.sleep(5)
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                continue
+            break
+        else:
+            raise BigIPError(
+                f"Timed out after {timeout}s waiting for module levels (expected: {sorted(want)})"
+            )
+
+        settle_deadline = time.time() + min(120, max(30, timeout // 4))
+        while time.time() < settle_deadline:
+            try:
+                self.reauthenticate()
+            except BigIPError:
+                pass
+            try:
+                r = self._get("/mgmt/shared/appsvcs/info")
+                if r.status_code == 200:
+                    time.sleep(3)
+                    return
+                if r.status_code == 404:
+                    # AS3 RPM not installed yet; provisioning restart is still finished.
+                    time.sleep(8)
+                    return
+            except requests.RequestException:
+                pass
+            time.sleep(5)
+
     def extension_info(self, name: str) -> dict | None:
         resp = self._get(f"/mgmt/shared/{name}/info")
         if resp.status_code == 200:
@@ -336,6 +412,44 @@ def ensure_extensions(
     return installed
 
 
+def modules_required_for_services(services: dict[str, bool]) -> dict[str, str]:
+    """TMOS module slug (lowercase) -> human-readable reason."""
+    need: dict[str, str] = {}
+    if services.get("http_analytics") or services.get("tcp_analytics"):
+        need["avr"] = "HTTP or TCP Analytics profiles (Analytics_Profile / Analytics_TCP_Profile)"
+    if services.get("asm"):
+        need["asm"] = "ASM security log profile (application)"
+    if services.get("afm"):
+        need["afm"] = "AFM security log profile (network)"
+    return need
+
+
+def ensure_modules_provisioned(
+    client: BigIPClient,
+    modules: list[str],
+    *,
+    level: str = "nominal",
+    wait_timeout: int = 300,
+) -> list[str]:
+    """PATCH any listed module that is at level ``none``; wait for REST. Returns slugs PATCHed."""
+    modules = [m.lower().strip() for m in modules if m.strip()]
+    if not modules:
+        return []
+    try:
+        levels = client.provision_query()
+    except BigIPError as exc:
+        raise BigIPError(f"Cannot read provisioning state before PATCH: {exc}") from exc
+    patched: list[str] = []
+    for m in modules:
+        cur = levels.get(m, "none")
+        if cur in ("none", ""):
+            client.patch_provision_level(m, level=level)
+            patched.append(m)
+    if patched:
+        client.wait_provision_and_rest(patched, timeout=wait_timeout)
+    return patched
+
+
 def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bool] | None = None) -> dict:
     checks: list[str] = []
     missing: list[str] = []
@@ -353,6 +467,25 @@ def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bo
         required_objects = []
     else:
         required_objects = required_as3_object_names(services)
+
+    modules_detail: dict[str, Any] = {}
+    needed_mods = modules_required_for_services(services) if services is not None else {}
+    if needed_mods:
+        try:
+            provision = client.provision_query()
+        except BigIPError as exc:
+            warnings.append(f"Could not read TMOS provisioning: {exc}")
+            provision = {}
+        for mod, reason in needed_mods.items():
+            level = provision.get(mod, "none")
+            modules_detail[mod] = {"level": level, "required_for": reason}
+            if level in ("none", ""):
+                missing.append(
+                    f"TMOS module '{mod.upper()}' is not provisioned ({reason}). "
+                    "Enable 'Provision required TMOS modules' during remediation to set nominal level."
+                )
+            else:
+                checks.append(f"TMOS module {mod.upper()} is provisioned ({level}) — {reason}")
 
     as3_info = client.extension_info("appsvcs")
     if as3_info:
@@ -411,6 +544,7 @@ def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bo
         "missing": missing,
         "warnings": warnings,
         "consumer_status": consumer_status,
+        "modules": modules_detail,
         "ready": not missing,
     }
 
@@ -426,6 +560,13 @@ def print_report(host: str, findings: dict) -> None:
         print(f"  [WARN]    {w}")
     for m in findings["missing"]:
         print(f"  [MISSING] {m}")
+    mods = findings.get("modules") or {}
+    if mods:
+        print("  Modules:")
+        for slug, info in sorted(mods.items()):
+            lvl = info.get("level", "?")
+            why = info.get("required_for", "")
+            print(f"    {slug.upper():<6} level={lvl} — {why}")
     print("-" * 72)
     print(f"  Consumer: {findings['consumer_status']}")
     print(f"  STATUS:   {'READY' if findings['ready'] else 'NOT READY'}")

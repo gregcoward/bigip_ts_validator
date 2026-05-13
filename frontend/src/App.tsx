@@ -21,6 +21,7 @@ type Findings = {
   consumer_status: string;
   ready: boolean;
   consumer_normalized?: string;
+  modules?: Record<string, { level: string; required_for: string }>;
 };
 
 const defaultServices: Services = {
@@ -292,6 +293,7 @@ export default function App() {
   const [services, setServices] = useState<Services>({ ...defaultServices });
   const [params, setParams] = useState<Record<string, string>>({ protocol: "https", port: "8088" });
   const [installPrereqs, setInstallPrereqs] = useState(false);
+  const [provisionModules, setProvisionModules] = useState(false);
   const [includeListener, setIncludeListener] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
@@ -357,6 +359,8 @@ export default function App() {
           consumer_params,
           services: servicesPayload,
           install_prereqs: installPrereqs,
+          provision_modules: provisionModules,
+          provision_level: "nominal",
           apply_as3: true,
           post_ts: true,
           include_event_listener: includeListener,
@@ -537,6 +541,11 @@ export default function App() {
           <input type="checkbox" checked={includeListener} onChange={(e) => setIncludeListener(e.target.checked)} />
           Include Telemetry_Listener on port 6514 (required for syslog-style event forwarding in the standard pattern)
         </label>
+        <label className="check" style={{ marginTop: "0.5rem" }}>
+          <input type="checkbox" checked={provisionModules} onChange={(e) => setProvisionModules(e.target.checked)} />
+          Provision required TMOS modules at nominal level (AVR for HTTP/TCP analytics, ASM / AFM when those sources
+          are selected). Causes a short TMM/REST restart on the BIG-IP.
+        </label>
       </div>
 
       <div className="actions" style={{ marginBottom: "1rem" }}>
@@ -558,6 +567,18 @@ export default function App() {
             )}
           </p>
           <p className={findings.ready ? "status-ready" : "status-not"}>{findings.ready ? "READY" : "NOT READY"}</p>
+          {findings.modules && Object.keys(findings.modules).length > 0 && (
+            <>
+              <p>TMOS modules (for selected telemetry sources)</p>
+              <ul>
+                {Object.entries(findings.modules).map(([slug, info]) => (
+                  <li key={slug}>
+                    <strong>{slug.toUpperCase()}</strong> — level <code>{info.level}</code>: {info.required_for}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <p>Checks</p>
           <ul>
             {findings.checks.map((c) => (
