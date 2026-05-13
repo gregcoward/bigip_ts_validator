@@ -3,7 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BIG-IP Telemetry Streaming</title>
+    <title>BIG-IP Telemetry Streaming Validator/Configurator</title>
+    <script>
+      (() => {
+        try {
+          const m = localStorage.getItem("bigip-ts-ui-theme");
+          let dark = false;
+          if (m === "dark") dark = true;
+          else if (m === "light") dark = false;
+          else dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        } catch (_) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
