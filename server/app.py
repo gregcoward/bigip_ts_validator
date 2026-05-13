@@ -173,8 +173,13 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             as3_decl = build_as3_declaration(svc)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if svc.get("asm"):
+            try:
+                s.client.wait_asm_policy_api_ready(timeout=300)
+            except BigIPError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
         try:
-            as3_resp = s.client.post_as3(as3_decl)
+            as3_resp = s.client.post_as3(as3_decl, retries=6, retry_delay=20.0)
             steps.append({"step": "post_as3", "response": as3_resp})
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

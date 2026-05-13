@@ -462,6 +462,15 @@ Mitigations:
   `{"level": "nominal"}`). Provisioning causes a short REST/TMM restart and may
   exceed CPU/RAM on small vBIG-IPs.
 
+**ASM and AS3 422 (`localhost:8100`, `Connection refused`):** after provisioning
+ASM (or other restarts), AS3 may still return **422** while it queries
+`/mgmt/tm/asm/policies` through an on-box listener (often **localhost:8100**)
+that is not accepting connections yet. That is a **warm-up race**, not a bad
+declaration. The Web UI remediation path waits on **`GET /mgmt/tm/asm/policies`**
+when **ASM** is selected, then **retries** the AS3 POST on transient 422
+responses. If it still fails, wait one to two minutes and run **validate +
+remediate** again without re-installing RPMs.
+
 ## Limitations and known gaps
 
 - **TS declaration creation (CLI).** The CLI still reports whether a

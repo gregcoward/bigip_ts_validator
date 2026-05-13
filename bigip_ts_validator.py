@@ -60,6 +60,16 @@ class BigIPError(RuntimeError):
     pass
 
 
+def _as3_post_error_transient(body: str) -> bool:
+    t = body.lower()
+    return (
+        "connection refused" in t
+        or "connectexception" in t
+        or "localhost:8100" in t
+        or "failure querying config" in t and "asm/policies" in t
+    )
+
+
 class BigIPClient:
     def __init__(self, host: str, username: str, password: str, verify_tls: bool = False, timeout: int = 30):
         self.base_url = f"https://{host}"
@@ -124,6 +134,53 @@ class BigIPClient:
             return resp.json() if resp.text.strip() else {}
         except json.JSONDecodeError:
             return {}
+
+    def wait_asm_policy_api_ready(self, timeout: int = 300, interval: float = 5.0) -> None:
+        """Wait until ASM policy REST is usable on the management API.
+
+        After ASM (or related) provisioning or TMM/restjavad restarts, AS3 may POST
+        successfully to ``/declare`` but return **422** while it queries ASM policies
+        via **localhost:8100** on the device (``java.net.ConnectException: Connection
+        refused``). Polling ``/mgmt/tm/asm/policies`` from here usually tracks the
+        same readiness window.
+        """
+        deadline = time.time() + timeout
+        path = "/mgmt/tm/asm/policies?$top=1&$select=name"
+        while time.time() < deadline:
+            try:
+                r = self._get(path)
+            except requests.RequestException:
+                time.sleep(interval)
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                continue
+            if r.status_code == 200:
+                return
+            text = (r.text or "").lower()
+            if r.status_code in (401, 403):
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                time.sleep(interval)
+                continue
+            transient = r.status_code in (502, 503, 504) or (
+                r.status_code == 400
+                and (
+                    "connection refused" in text
+                    or "connectexception" in text
+                    or "temporarily unavailable" in text
+                )
+            )
+            if transient:
+                time.sleep(interval)
+                continue
+            raise BigIPError(
+                f"ASM policy API returned ({r.status_code}) while waiting for readiness: {r.text[:1200]}"
+            )
+        raise BigIPError(f"Timed out after {timeout}s waiting for ASM policy REST ({path})")
 
     def wait_provision_and_rest(self, modules: list[str], timeout: int = 300) -> None:
         """Wait until provisioned modules leave ``none``, then allow REST to settle."""
@@ -192,11 +249,34 @@ class BigIPClient:
             return resp.json()
         return None
 
-    def post_as3(self, declaration: dict) -> dict:
-        resp = self._post("/mgmt/shared/appsvcs/declare", declaration)
-        if resp.status_code >= 400:
-            raise BigIPError(f"AS3 POST failed ({resp.status_code}): {resp.text}")
-        return resp.json()
+    def post_as3(
+        self,
+        declaration: dict,
+        *,
+        retries: int = 1,
+        retry_delay: float = 20.0,
+    ) -> dict:
+        """POST to AS3 ``/declare``. Retries on transient 422 (ASM control plane warming)."""
+        last_err: str | None = None
+        for attempt in range(max(1, retries)):
+            resp = self._post("/mgmt/shared/appsvcs/declare", declaration)
+            if resp.status_code < 400:
+                return resp.json()
+            body = resp.text or ""
+            last_err = f"AS3 POST failed ({resp.status_code}): {body}"
+            if (
+                resp.status_code == 422
+                and attempt + 1 < retries
+                and _as3_post_error_transient(body)
+            ):
+                time.sleep(retry_delay)
+                try:
+                    self.reauthenticate()
+                except BigIPError:
+                    pass
+                continue
+            raise BigIPError(last_err)
+        raise BigIPError(last_err or "AS3 POST failed")
 
     def post_ts_declaration(self, declaration: dict) -> dict:
         """POST a Telemetry Streaming declaration to /mgmt/shared/telemetry/declare."""
