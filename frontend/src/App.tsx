@@ -389,7 +389,18 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <>
+      {busy ? (
+        <div
+          className="app-busy-overlay"
+          role="status"
+          aria-live="polite"
+          aria-label="Working, please wait"
+        >
+          <div className="app-busy-spinner" aria-hidden />
+        </div>
+      ) : null}
+      <div className="app">
       <header className="app-header">
         <div className="app-header-brand">
           <img
@@ -630,5 +641,6 @@ export default function App() {
         </div>
       )}
     </div>
+    </>
   );
 }

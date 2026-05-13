@@ -333,3 +333,36 @@ a:hover {
   color: var(--pre-text);
   border: 1px solid var(--pre-border);
 }
+
+/* Full-viewport busy state (connect / validate / remediate) */
+.app-busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  cursor: progress;
+  background: rgb(15 23 42 / 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+:root[data-theme="dark"] .app-busy-overlay {
+  background: rgb(0 0 0 / 0.35);
+}
+
+.app-busy-spinner {
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 3px solid var(--border);
+  border-top-color: var(--btn-primary-bg);
+  border-radius: 50%;
+  animation: app-busy-spin 0.7s linear infinite;
+  box-shadow: 0 2px 16px rgb(0 0 0 / 0.12);
+}
+
+@keyframes app-busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
