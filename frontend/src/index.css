@@ -103,8 +103,25 @@ a:hover {
   margin-bottom: 0.5rem;
 }
 
-.app-header-main {
+.app-header-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
   flex: 1 1 280px;
+  min-width: 0;
+}
+
+.app-header-logo {
+  flex: 0 0 auto;
+  width: 2.75rem;
+  height: 2.75rem;
+  object-fit: contain;
+  display: block;
+  margin-top: 0.06rem;
+}
+
+.app-header-main {
+  flex: 1 1 auto;
   min-width: 0;
 }
 

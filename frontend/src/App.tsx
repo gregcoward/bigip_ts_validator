@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import f5LogoUrl from "./assets/F5-logo-F5-rgb.svg";
+
 const api = (path: string) => path;
 
 const THEME_STORAGE_KEY = "bigip-ts-ui-theme";
@@ -390,20 +392,29 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="app-header-main">
-          <h1 className="app-title">BIG-IP Telemetry Streaming Validator/Configurator</h1>
-          <p className="muted" style={{ marginTop: 0 }}>
-            Connect to a BIG-IP, validate readiness, apply AS3 logging resources for the services you select, and post a
-            Telemetry Streaming declaration. Consumer reference:{" "}
-            <a
-              href="https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Push Consumers
-            </a>
-            .
-          </p>
+        <div className="app-header-brand">
+          <img
+            className="app-header-logo"
+            src={f5LogoUrl}
+            width={44}
+            height={44}
+            alt="F5"
+          />
+          <div className="app-header-main">
+            <h1 className="app-title">BIG-IP Telemetry Streaming Validator/Configurator</h1>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Connect to a BIG-IP, validate readiness, apply AS3 logging resources for the services you select, and post a
+              Telemetry Streaming declaration. Consumer reference:{" "}
+              <a
+                href="https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Push Consumers
+              </a>
+              .
+            </p>
+          </div>
         </div>
         <div className="theme-toolbar">
           <span className="theme-toolbar-label" id="theme-label">
