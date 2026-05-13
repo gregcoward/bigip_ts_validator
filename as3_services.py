@@ -69,6 +69,28 @@ def required_as3_object_names(services: dict[str, bool] | None) -> list[tuple[st
     return result
 
 
+# AS3 ADC schema: ``remark`` must be at most 64 characters (422 if longer).
+AS3_REMARK_MAX_LEN = 64
+
+
+def remark_for_services(services: dict[str, bool]) -> str:
+    """Human-readable but schema-safe remark for the ADC declaration."""
+    # Short tags keep all five services under the limit (unlike full key names).
+    tag_map = {
+        "ltm": "ltm",
+        "asm": "asm",
+        "afm": "afm",
+        "http_analytics": "http",
+        "tcp_analytics": "tcp",
+    }
+    tags = [tag_map[k] for k, v in services.items() if v and k in tag_map]
+    body = ",".join(tags) if tags else "shared"
+    s = f"F5-TS-AS3:{body}"
+    if len(s) <= AS3_REMARK_MAX_LEN:
+        return s
+    return s[:AS3_REMARK_MAX_LEN]
+
+
 def build_as3_declaration(services: dict[str, bool]) -> dict[str, Any]:
     """Return a full ADC declaration for /mgmt/shared/appsvcs/declare."""
     tmpl = copy.deepcopy(_load_full_template())
@@ -99,7 +121,3 @@ def build_as3_declaration(services: dict[str, bool]) -> dict[str, Any]:
 
     return tmpl
 
-
-def remark_for_services(services: dict[str, bool]) -> str:
-    parts = [k for k, v in services.items() if v]
-    return "AS3 telemetry resources for: " + ", ".join(parts) if parts else "AS3 telemetry resources"
