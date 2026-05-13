@@ -512,12 +512,12 @@ export default function App() {
         <div className="check-grid">
           {(
             [
-              ["ltm", "LTM request/response logging"],
+              ["ltm", "LTM logging"],
               ["asm", "ASM (application security)"],
               ["afm", "AFM (network security)"],
               ["http_analytics", "HTTP Analytics (AVR)"],
               ["tcp_analytics", "TCP Analytics (AVR)"],
-              ["dns", "DNS (GTM) logging — AS3 DNS_Logging_Profile → TS"],
+              ["dns", "DNS (GTM) logging"],
             ] as const
           ).map(([k, label]) => (
             <label key={k} className="check">
