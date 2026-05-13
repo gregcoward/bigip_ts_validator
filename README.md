@@ -21,6 +21,33 @@ The tool is intentionally read-only by default and explicit about every
 mutation: it tells you what it's about to do, asks to confirm, and reports
 what changed.
 
+## Table of contents
+
+- [Overview](#bigip-ts-validator)
+- [Repository layout](#repository-layout)
+- [Requirements](#requirements)
+  - [Workstation](#workstation)
+  - [Installing prerequisites on Linux and macOS](#installing-prerequisites-on-linux-and-macos)
+  - [BIG-IP](#big-ip)
+- [Installation](#installation)
+  - [Web UI (React + FastAPI)](#web-ui-react-fastapi)
+- [Inputs](#inputs)
+- [Usage](#usage)
+  - [Validate only](#validate-only)
+  - [Validate, install missing extensions, apply AS3](#validate-install-missing-extensions-apply-as3)
+  - [Use the AFM-free AS3 variant](#use-the-afm-free-as3-variant)
+- [Workflow steps](#workflow-steps)
+- [What is validated](#what-is-validated)
+- [Exit codes](#exit-codes)
+- [Module compatibility](#module-compatibility)
+- [Limitations and known gaps](#limitations-and-known-gaps)
+- [Roadmap](#roadmap)
+  - [Near term](#near-term)
+  - [Frontend UI](#frontend-ui)
+  - [Stretch](#stretch)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Repository layout
 
 ```
