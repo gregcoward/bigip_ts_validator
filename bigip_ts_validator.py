@@ -70,6 +70,39 @@ def _as3_post_error_transient(body: str) -> bool:
     )
 
 
+def _install_task_failed_because_already_installed(error_message: str, task_payload: dict) -> bool:
+    """True when iControl LX reports INSTALL FAILED only because the RPM is already on the box."""
+    blob = f"{error_message}\n{task_payload}".lower()
+    return (
+        "already installed" in blob
+        or "is already installed" in blob
+        or "package is already installed" in blob
+        or "same version" in blob and "installed" in blob
+    )
+
+
+def _extension_info_with_settle(
+    client: BigIPClient,
+    name: str,
+    *,
+    attempts: int = 5,
+    delay: float = 1.5,
+) -> dict | None:
+    """Poll ``/mgmt/shared/{name}/info``; after restarts it may briefly not return 200."""
+    last: dict | None = None
+    for attempt in range(attempts):
+        last = client.extension_info(name)
+        if last:
+            return last
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+            try:
+                client.reauthenticate()
+            except BigIPError:
+                pass
+    return last
+
+
 class BigIPClient:
     def __init__(self, host: str, username: str, password: str, verify_tls: bool = False, timeout: int = 30):
         self.base_url = f"https://{host}"
@@ -336,11 +369,15 @@ class BigIPClient:
             status = data.get("status")
             if status == "FINISHED":
                 return data
+            if status == "FAILED":
+                err = str(data.get("errorMessage") or data.get("message") or "")
+                if _install_task_failed_because_already_installed(err, data):
+                    return data
             if status in ("FAILED", "CANCELED"):
                 raise BigIPError(f"Install task {task_id} {status}: {data.get('errorMessage') or data}")
         raise BigIPError(f"Install task {task_id} timed out after {timeout}s")
 
-    def wait_for_extension(self, name: str, timeout: int = 180) -> dict:
+    def wait_for_extension(self, name: str, timeout: int = 420) -> dict:
         deadline = time.time() + timeout
         last_err = None
         while time.time() < deadline:
@@ -452,12 +489,18 @@ def ensure_extensions(
     as3_version: str | None,
     ts_version: str | None,
     assume_yes: bool,
+    *,
+    extension_wait_timeout: int = 600,
 ) -> list[str]:
-    """Install any missing AS3/TS extensions. Returns the list of names actually installed."""
+    """Install any missing AS3/TS extensions. Returns the list of names actually installed.
+
+    ``extension_wait_timeout`` bounds polling of ``/mgmt/shared/{appsvcs,telemetry}/info``
+    after each RPM install; large or busy systems often exceed 180s while restjavad restarts.
+    """
     targets: list[tuple[str, str, str | None]] = []  # (extension_name, github_repo, pinned_version)
-    if not client.extension_info("appsvcs"):
+    if not _extension_info_with_settle(client, "appsvcs"):
         targets.append(("appsvcs", F5_AS3_REPO, as3_version))
-    if not client.extension_info("telemetry"):
+    if not _extension_info_with_settle(client, "telemetry"):
         targets.append(("telemetry", F5_TS_REPO, ts_version))
     if not targets:
         return []
@@ -486,7 +529,7 @@ def ensure_extensions(
         print(f"Installing {ext_name} ({tag}) ...")
         client.install_package(remote)
         print(f"Waiting for {ext_name} to come online ...")
-        info = client.wait_for_extension(ext_name)
+        info = client.wait_for_extension(ext_name, timeout=extension_wait_timeout)
         print(f"  -> {ext_name} version {info.get('version', 'unknown')} is up")
         installed.append(ext_name)
     return installed
@@ -530,7 +573,13 @@ def ensure_modules_provisioned(
     return patched
 
 
-def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bool] | None = None) -> dict:
+def validate(
+    client: BigIPClient,
+    expected_consumer: str,
+    services: dict[str, bool] | None = None,
+    *,
+    include_local_listener: bool = True,
+) -> dict:
     checks: list[str] = []
     missing: list[str] = []
     warnings: list[str] = []
@@ -546,7 +595,7 @@ def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bo
         )
         required_objects = []
     else:
-        required_objects = required_as3_object_names(services)
+        required_objects = required_as3_object_names(services, include_local_listener=include_local_listener)
 
     modules_detail: dict[str, Any] = {}
     needed_mods = modules_required_for_services(services) if services is not None else {}
@@ -591,7 +640,10 @@ def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bo
                 checks.append(f"AS3 resource present: {name} ({cls})")
             else:
                 missing.append(f"AS3 resource missing in /Common/Shared: {name} ({cls})")
+        optional_skip = {"telemetry_local_rule", "telemetry_local"} if include_local_listener else set()
         for name, cls in OPTIONAL_AS3_OBJECTS:
+            if name in optional_skip:
+                continue
             obj = shared.get(name)
             if isinstance(obj, dict) and obj.get("class") == cls:
                 checks.append(f"Optional AS3 resource present: {name} ({cls})")
@@ -684,6 +736,13 @@ def main() -> int:
     parser.add_argument("--ts-version", help="Pin TS version, e.g. v1.36.0 (default: latest release)")
     parser.add_argument("--rpm-cache-dir", default=str(DEFAULT_RPM_CACHE),
                         help="Directory where downloaded RPMs are cached")
+    parser.add_argument(
+        "--extension-wait-timeout",
+        type=int,
+        default=600,
+        metavar="SEC",
+        help="After each RPM install, wait up to SEC for the extension /info endpoint (default: 600)",
+    )
     parser.add_argument("--verify-tls", action="store_true", help="Verify the BIG-IP TLS certificate")
     parser.add_argument("--json", action="store_true", help="Emit the final findings as JSON on stdout")
     args = parser.parse_args()
@@ -704,6 +763,7 @@ def main() -> int:
                 as3_version=args.as3_version,
                 ts_version=args.ts_version,
                 assume_yes=args.yes,
+                extension_wait_timeout=args.extension_wait_timeout,
             )
         except BigIPError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)

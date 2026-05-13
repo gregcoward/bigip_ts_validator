@@ -108,6 +108,24 @@ def _tcp_analytics_profile() -> dict[str, Any]:
     }
 
 
+def _local_listener_objects() -> dict[str, Any]:
+    """Service_TCP + iRule so traffic to 255.255.255.254:6514 reaches TS on 127.0.0.1:6514."""
+    return {
+        "telemetry_local_rule": {
+            "remark": "TS local listener forward",
+            "class": "iRule",
+            "iRule": "when CLIENT_ACCEPTED {\n  node 127.0.0.1 6514\n}",
+        },
+        "telemetry_local": {
+            "remark": "TS local listener virtual",
+            "class": "Service_TCP",
+            "virtualAddresses": ["255.255.255.254"],
+            "virtualPort": 6514,
+            "iRules": ["telemetry_local_rule"],
+        },
+    }
+
+
 def _security_log_profile(*, asm: bool, afm: bool) -> dict[str, Any] | None:
     if not asm and not afm:
         return None
@@ -137,7 +155,7 @@ def _needs_hsl_chain(services: dict[str, bool]) -> bool:
     return bool(services.get("ltm") or services.get("afm"))
 
 
-def _build_shared_application(services: dict[str, bool]) -> dict[str, Any]:
+def _build_shared_application(services: dict[str, bool], *, include_local_listener: bool) -> dict[str, Any]:
     if not any(
         services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
     ):
@@ -164,10 +182,17 @@ def _build_shared_application(services: dict[str, bool]) -> dict[str, Any]:
     if sec is not None:
         shared["telemetry_asm_security_log_profile"] = sec
 
+    if include_local_listener:
+        shared.update(_local_listener_objects())
+
     return shared
 
 
-def required_as3_object_names(services: dict[str, bool] | None) -> list[tuple[str, str]]:
+def required_as3_object_names(
+    services: dict[str, bool] | None,
+    *,
+    include_local_listener: bool = True,
+) -> list[tuple[str, str]]:
     """Return (name, AS3 class) pairs that must exist for the given service selection.
 
     When ``services`` is None, use the same rules as **all** logging options enabled
@@ -206,6 +231,16 @@ def required_as3_object_names(services: dict[str, bool] | None) -> list[tuple[st
     if services.get("asm") or services.get("afm"):
         pairs.append(("telemetry_asm_security_log_profile", "Security_Log_Profile"))
 
+    if include_local_listener and any(
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+    ):
+        pairs.extend(
+            [
+                ("telemetry_local_rule", "iRule"),
+                ("telemetry_local", "Service_TCP"),
+            ]
+        )
+
     return pairs
 
 
@@ -226,7 +261,7 @@ def remark_for_services(services: dict[str, bool]) -> str:
     return s[:AS3_REMARK_MAX_LEN]
 
 
-def build_as3_declaration(services: dict[str, bool]) -> dict[str, Any]:
+def build_as3_declaration(services: dict[str, bool], *, include_local_listener: bool = True) -> dict[str, Any]:
     """Return a full ADC declaration for /mgmt/shared/appsvcs/declare.
 
     Objects under ``/Common/Shared`` are created only for the selected
@@ -234,8 +269,13 @@ def build_as3_declaration(services: dict[str, bool]) -> dict[str, Any]:
     profiles, HTTP / TCP analytics profiles). The HSL → pool chain is included
     only when LTM or AFM logging is selected (AFM ``network`` logging uses the
     log publisher).
+
+    When ``include_local_listener`` is true (default), adds ``telemetry_local``
+    (``Service_TCP``) and ``telemetry_local_rule`` so events destined for
+    ``255.255.255.254:6514`` reach Telemetry Streaming's on-box listener on
+    ``127.0.0.1:6514`` — pair with ``Telemetry_Listener`` in the TS declaration.
     """
-    shared = _build_shared_application(services)
+    shared = _build_shared_application(services, include_local_listener=include_local_listener)
     return {
         "class": "ADC",
         "schemaVersion": _SCHEMA_VERSION,

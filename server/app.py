@@ -71,6 +71,14 @@ class ServicesBody(BaseModel):
 class ValidateBody(BaseModel):
     consumer: str
     services: ServicesBody
+    include_event_listener: bool = Field(
+        default=True,
+        description="Expect AS3 local listener (Virtual+iRule) and TS Telemetry_Listener on 6514",
+    )
+    include_system_poller: bool = Field(
+        default=True,
+        description="Expect TS System Poller in declaration (informational for validate)",
+    )
 
 
 class RemediateBody(BaseModel):
@@ -120,7 +128,12 @@ def create_session(body: ConnectBody) -> dict[str, str]:
 def session_validate(session_id: str, body: ValidateBody) -> dict[str, Any]:
     s = _get_session(session_id)
     svc = body.services.model_dump()
-    findings = validate(s.client, body.consumer, svc)
+    findings = validate(
+        s.client,
+        body.consumer,
+        svc,
+        include_local_listener=body.include_event_listener,
+    )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
     return findings
 
@@ -170,7 +183,7 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
 
     if body.apply_as3:
         try:
-            as3_decl = build_as3_declaration(svc)
+            as3_decl = build_as3_declaration(svc, include_local_listener=body.include_event_listener)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if svc.get("asm"):
@@ -197,7 +210,12 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    findings = validate(s.client, body.consumer, svc)
+    findings = validate(
+        s.client,
+        body.consumer,
+        svc,
+        include_local_listener=body.include_event_listener,
+    )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
     return {"steps": steps, "findings": findings}
 
