@@ -13,8 +13,8 @@ The validator:
   `type` matches the expected consumer
 - (Optional) installs missing iControl LX extensions from F5 GitHub releases
 - (Optional) POSTs an AS3 declaration to create logging resources (the **Web UI**
-  builds this declaration dynamically from selected LTM / ASM / AFM / analytics
-  options; the CLI uses `--as3-file`, defaulting to the static example under `examples/`)
+  builds this declaration dynamically from selected LTM / ASM / AFM / DNS /
+  analytics options; the CLI uses `--as3-file`, defaulting to the static example under `examples/`)
 - **Web UI:** optional validate + remediate workflow that can also POST a TS
   declaration to `/mgmt/shared/telemetry/declare` for supported consumers
 
@@ -165,8 +165,9 @@ Examples:
   - POST to `/mgmt/shared/appsvcs/declare` (AS3)
   - GET `/mgmt/shared/telemetry/declare` (TS, read-only here)
 - Modules: at minimum **LTM**. Depending on what you deploy, you may also need
-  **AVR** (HTTP/TCP analytics), **ASM** (application security logging), and/or
-  **AFM** (network security logging). See **Module compatibility** below.
+  **AVR** (HTTP/TCP analytics), **ASM** (application security logging),
+  **AFM** (network security logging), and/or **GTM/DNS** (when using DNS logging
+  in the Web UI). See **Module compatibility** below.
 
 ## Installation
 
@@ -411,7 +412,7 @@ export BIGIP_PASSWORD='...'
 Depending on context, the tool checks only the AS3 objects that should exist for
 your **selected telemetry sources** (Web UI and API), or—when you use the CLI
 without a service scope—the full set matching the default `--as3-file` example
-(all LTM / ASM / AFM / analytics profiles below).
+(all LTM / ASM / AFM / DNS / analytics profiles below).
 
 Possible objects under `/Common/Shared` (subset required per selection):
 
@@ -425,6 +426,16 @@ Possible objects under `/Common/Shared` (subset required per selection):
 | `telemetry_http_analytics_profile`      | `Analytics_Profile`    |
 | `telemetry_tcp_analytics_profile`       | `Analytics_TCP_Profile`|
 | `telemetry_asm_security_log_profile`    | `Security_Log_Profile` |
+| `telemetry_dns_logging`                 | `DNS_Logging_Profile`  |
+
+When **DNS (GTM) logging** is selected in the Web UI or API, AS3 declares
+**`telemetry_dns_logging`** (`DNS_Logging_Profile`) with **`logPublisher`** pointing at
+the Shared **`telemetry_publisher`** (so the same HSL → Splunk-formatted →
+publisher chain as LTM/AFM). The **GTM / DNS services** module must be
+provisioned on the BIG-IP (TMOS **`gtm`** slot in **`/mgmt/tm/sys/provision`** on
+most images). Attach the published logging profile to **DNS profiles** or other
+objects per F5 documentation for your version; this tool only creates the Shared
+publisher chain and **`DNS_Logging_Profile`**.
 
 Optional objects (only needed for the TS "local listener" pattern, missing is a `[WARN]`):
 
@@ -450,7 +461,8 @@ The **Web UI** and remediation API build AS3 **only for the options you select**
 not need a separate “AFM-free” declaration file).
 
 If you still use the CLI with the default `examples/as3-telemetry-resources.json`,
-that static file includes **AVR**, **ASM**, and **AFM**-dependent objects together.
+that static file includes **AVR**, **ASM**, **AFM**, and optional **`DNS_Logging_Profile`**
+objects together.
 AS3 returns HTTP **422** if a referenced module is not provisioned on the box.
 
 Mitigations:

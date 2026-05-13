@@ -5,7 +5,7 @@ Checks the device for:
   * AS3 and Telemetry Streaming iControl LX extensions
   * The AS3-managed logging resources required by the TS "local listener" pattern
     (pool, iRule, virtual, HSL + formatted log destinations, log publisher,
-    traffic / analytics / TCP-analytics / security log profiles)
+    traffic / analytics / TCP-analytics / security / DNS logging profiles)
   * A Telemetry_Consumer of the expected type on the TS declaration
 
 If anything is missing the script can POST the supplied AS3 declaration to
@@ -544,6 +544,8 @@ def modules_required_for_services(services: dict[str, bool]) -> dict[str, str]:
         need["asm"] = "ASM security log profile (application)"
     if services.get("afm"):
         need["afm"] = "AFM security log profile (network)"
+    if services.get("dns"):
+        need["gtm"] = "DNS logging profile (GTM / DNS services module)"
     return need
 
 
@@ -588,10 +590,10 @@ def validate(
 
     required_objects: list[tuple[str, str]]
     if services is not None and not any(
-        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics", "dns")
     ):
         missing.append(
-            "Select at least one telemetry scope (LTM, ASM, AFM, HTTP Analytics, or TCP Analytics)"
+            "Select at least one telemetry scope (LTM, ASM, AFM, HTTP/TCP Analytics, or DNS logging)"
         )
         required_objects = []
     else:

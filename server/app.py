@@ -66,6 +66,7 @@ class ServicesBody(BaseModel):
     afm: bool = False
     http_analytics: bool = False
     tcp_analytics: bool = False
+    dns: bool = False
 
 
 class ValidateBody(BaseModel):

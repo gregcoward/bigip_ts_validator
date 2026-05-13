@@ -135,6 +135,15 @@
                     "logTcpErrors": true,
                     "logTcpEvents": true
                 }
+            },
+            "telemetry_dns_logging": {
+                "class": "DNS_Logging_Profile",
+                "remark": "DNS logging to TS",
+                "logPublisher": {
+                    "use": "telemetry_publisher"
+                },
+                "logQueriesEnabled": true,
+                "logResponsesEnabled": true
             }
         }
     }

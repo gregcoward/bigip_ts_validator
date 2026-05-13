@@ -73,7 +73,8 @@ The script checks `/Common/Shared` on the BIG-IP for the AS3 objects defined
 in the bundled example: `telemetry` pool, `telemetry_hsl` and
 `telemetry_formatted` log destinations, `telemetry_publisher`,
 `telemetry_traffic_log_profile`, `telemetry_http_analytics_profile`,
-`telemetry_tcp_analytics_profile`, and `telemetry_asm_security_log_profile`.
+`telemetry_tcp_analytics_profile`, `telemetry_asm_security_log_profile`, and
+`telemetry_dns_logging` (when present in the AS3 file).
 `telemetry_local_rule` and `telemetry_local` (the local-listener virtual)
 are checked as optional — their absence is a warning, not a failure, since
 they are only needed when TS listens locally.

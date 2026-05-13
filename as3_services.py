@@ -126,6 +126,17 @@ def _local_listener_objects() -> dict[str, Any]:
     }
 
 
+def _dns_logging_profile() -> dict[str, Any]:
+    """DNS (GTM) query/response logging to the Shared log publisher (TS via HSL chain)."""
+    return {
+        "class": "DNS_Logging_Profile",
+        "remark": "DNS logging to TS",
+        "logPublisher": {"use": "telemetry_publisher"},
+        "logQueriesEnabled": True,
+        "logResponsesEnabled": True,
+    }
+
+
 def _security_log_profile(*, asm: bool, afm: bool) -> dict[str, Any] | None:
     if not asm and not afm:
         return None
@@ -151,13 +162,13 @@ def _security_log_profile(*, asm: bool, afm: bool) -> dict[str, Any] | None:
 
 
 def _needs_hsl_chain(services: dict[str, bool]) -> bool:
-    """Pool / HSL / formatted / publisher chain is required for LTM logs and AFM network logging."""
-    return bool(services.get("ltm") or services.get("afm"))
+    """Pool / HSL / formatted / publisher chain for LTM, AFM network logging, and DNS logging."""
+    return bool(services.get("ltm") or services.get("afm") or services.get("dns"))
 
 
 def _build_shared_application(services: dict[str, bool], *, include_local_listener: bool) -> dict[str, Any]:
     if not any(
-        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics", "dns")
     ):
         raise ValueError("At least one telemetry service must be selected")
 
@@ -182,6 +193,9 @@ def _build_shared_application(services: dict[str, bool], *, include_local_listen
     if sec is not None:
         shared["telemetry_asm_security_log_profile"] = sec
 
+    if services.get("dns"):
+        shared["telemetry_dns_logging"] = _dns_logging_profile()
+
     if include_local_listener:
         shared.update(_local_listener_objects())
 
@@ -205,10 +219,11 @@ def required_as3_object_names(
             "afm": True,
             "http_analytics": True,
             "tcp_analytics": True,
+            "dns": False,
         }
 
     if not any(
-        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics", "dns")
     ):
         return []
 
@@ -230,9 +245,11 @@ def required_as3_object_names(
         pairs.append(("telemetry_tcp_analytics_profile", "Analytics_TCP_Profile"))
     if services.get("asm") or services.get("afm"):
         pairs.append(("telemetry_asm_security_log_profile", "Security_Log_Profile"))
+    if services.get("dns"):
+        pairs.append(("telemetry_dns_logging", "DNS_Logging_Profile"))
 
     if include_local_listener and any(
-        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics", "dns")
     ):
         pairs.extend(
             [
@@ -252,6 +269,7 @@ def remark_for_services(services: dict[str, bool]) -> str:
         "afm": "afm",
         "http_analytics": "http",
         "tcp_analytics": "tcp",
+        "dns": "dns",
     }
     tags = [tag_map[k] for k, v in services.items() if v and k in tag_map]
     body = ",".join(tags) if tags else "shared"
@@ -266,7 +284,7 @@ def build_as3_declaration(services: dict[str, bool], *, include_local_listener: 
 
     Objects under ``/Common/Shared`` are created only for the selected
     telemetry sources (LTM request/response logging, ASM / AFM security log
-    profiles, HTTP / TCP analytics profiles). The HSL → pool chain is included
+    profiles, HTTP / TCP analytics profiles, optional DNS logging). The HSL → pool chain is included
     only when LTM or AFM logging is selected (AFM ``network`` logging uses the
     log publisher).
 

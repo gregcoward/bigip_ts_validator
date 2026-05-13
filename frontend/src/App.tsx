@@ -14,6 +14,7 @@ type Services = {
   afm: boolean;
   http_analytics: boolean;
   tcp_analytics: boolean;
+  dns: boolean;
 };
 
 type Findings = {
@@ -32,6 +33,7 @@ const defaultServices: Services = {
   afm: false,
   http_analytics: false,
   tcp_analytics: false,
+  dns: false,
 };
 
 function buildConsumerPayload(raw: Record<string, string>): Record<string, unknown> {
@@ -502,7 +504,11 @@ export default function App() {
 
       <div className="card">
         <h2>Telemetry sources (AS3)</h2>
-        <p className="muted">Choose which profiles to create under /Common/Shared. AVR must be provisioned for HTTP/TCP analytics profiles.</p>
+        <p className="muted">
+          Choose which profiles to create under /Common/Shared. AVR must be provisioned for HTTP/TCP analytics. DNS
+          logging requires the GTM/DNS module and attaches a <code>DNS_Logging</code> profile to the Shared publisher
+          chain — assign it to DNS profiles in TMOS or the GUI per F5 docs.
+        </p>
         <div className="check-grid">
           {(
             [
@@ -511,6 +517,7 @@ export default function App() {
               ["afm", "AFM (network security)"],
               ["http_analytics", "HTTP Analytics (AVR)"],
               ["tcp_analytics", "TCP Analytics (AVR)"],
+              ["dns", "DNS (GTM) logging — AS3 DNS_Logging_Profile → TS"],
             ] as const
           ).map(([k, label]) => (
             <label key={k} className="check">
@@ -569,8 +576,8 @@ export default function App() {
         </label>
         <label className="check" style={{ marginTop: "0.5rem" }}>
           <input type="checkbox" checked={provisionModules} onChange={(e) => setProvisionModules(e.target.checked)} />
-          Provision required TMOS modules at nominal level (AVR for HTTP/TCP analytics, ASM / AFM when those sources
-          are selected). Causes a short TMM/REST restart on the BIG-IP.
+          Provision required TMOS modules at nominal level (AVR for HTTP/TCP analytics, ASM / AFM / GTM when those
+          sources are selected). Causes a short TMM/REST restart on the BIG-IP.
         </label>
       </div>
 
