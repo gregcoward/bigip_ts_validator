@@ -5,6 +5,10 @@ __pycache__/
 # Downloaded iControl LX RPMs cached by --install-prereqs
 rpms/
 
+# Web UI
+frontend/node_modules/
+frontend/dist/
+
 # Local Claude Code session state (but keep checked-in agent definitions)
 .claude/*
 !.claude/agents/

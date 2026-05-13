@@ -14,6 +14,8 @@ The validator:
 - (Optional) installs missing iControl LX extensions from F5 GitHub releases
 - (Optional) POSTs a bundled AS3 declaration to create the missing logging
   resources
+- **Web UI:** optional validate + remediate workflow that can also POST a TS
+  declaration to `/mgmt/shared/telemetry/declare` for supported consumers
 
 The tool is intentionally read-only by default and explicit about every
 mutation: it tells you what it's about to do, asks to confirm, and reports
@@ -23,14 +25,19 @@ what changed.
 
 ```
 bigip-ts-validator/
-├── bigip_ts_validator.py                       # CLI + library
-├── requirements.txt                            # `requests`, `urllib3`
+├── bigip_ts_validator.py          # CLI + library (BigIPClient, validate, ensure_extensions)
+├── as3_services.py                # Service-scoped AS3 builder + required object list
+├── ts_declaration_builder.py      # TS declaration composer (consumers)
+├── server/app.py                  # FastAPI session API
+├── run_server.py                  # `uvicorn` entrypoint
+├── frontend/                      # React (Vite) SPA
+├── requirements.txt
 ├── examples/
-│   ├── as3-telemetry-resources.json            # full AS3 (needs AVR + AFM + ASM)
-│   └── as3-telemetry-resources-no-afm.json     # AS3 without AFM-dependent block
+│   ├── as3-telemetry-resources.json
+│   └── as3-telemetry-resources-no-afm.json
 ├── agents/
-│   └── bigip-ts-validator.md                   # Claude Code subagent definition
-├── rpms/                                       # downloaded RPM cache (gitignored)
+│   └── bigip-ts-validator.md
+├── rpms/                          # downloaded RPM cache (gitignored)
 └── LICENSE
 ```
 
@@ -69,6 +76,38 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+### Web UI (React + FastAPI)
+
+The repository includes a small browser UI to connect to a BIG-IP, pick which
+logging and analytics profiles to create (LTM, ASM, AFM, HTTP Analytics, TCP
+Analytics), choose a [Telemetry Streaming push consumer](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html),
+fill in consumer-specific parameters (HEC token, workspace keys, and so on),
+validate readiness, and optionally install extensions, POST the filtered AS3
+declaration, and POST a composed TS declaration.
+
+**Security model:** the BIG-IP password is sent once to this application's Python
+process over HTTPS to your workstation. It is kept only in an in-memory session
+(about 45 minutes of idle TTL) and is never written to disk or returned in API
+responses. Run the API on `127.0.0.1` unless you intentionally expose it inside
+a trusted management network.
+
+```bash
+# Terminal 1 — API (serves built UI from frontend/dist when present)
+cd bigip-ts-validator
+.venv/bin/pip install -r requirements.txt
+cd frontend && npm install && npm run build && cd ..
+.venv/bin/python run_server.py
+# Open http://127.0.0.1:8000 when frontend/dist exists, else use Terminal 2.
+
+# Terminal 2 — optional hot-reload UI during development
+cd bigip-ts-validator/frontend
+npm run dev
+# Vite proxies /api to http://127.0.0.1:8000
+```
+
+API endpoints (for custom integrations): `POST /api/session`, `POST /api/session/{id}/validate`,
+`POST /api/session/{id}/remediate`, `GET /api/consumers`, `GET /api/health`.
+
 ## Inputs
 
 | Input            | Where it goes                | Notes                                                                 |
@@ -76,7 +115,7 @@ python3 -m venv .venv
 | BIG-IP host      | `--host <ip-or-hostname>`    | Required. Management address.                                         |
 | Username         | `--username <name>`          | Required. Admin or admin-equivalent.                                  |
 | Password         | `$BIGIP_PASSWORD` (preferred), `--password`, or interactive `getpass` prompt | Avoid passing on the command line — it shows in shell history / `ps`. |
-| Consumer type    | `--consumer <Type>`          | Required. e.g. `Splunk`, `Azure_Log_Analytics`, `AWS_CloudWatch`, `Datadog`, `Generic_HTTP`, `Sumo_Logic`, `ElasticSearch`. |
+| Consumer type    | `--consumer <Type>`          | Required. e.g. `Splunk`, `Azure_Log_Analytics`, `AWS_CloudWatch`, `DataDog` (BIG-IP spelling; `Datadog` is accepted as an alias), `Generic_HTTP`, `Sumo_Logic`, `ElasticSearch`. |
 | AS3 file         | `--as3-file <path>`          | Optional. Defaults to `examples/as3-telemetry-resources.json`.        |
 | Install prereqs  | `--install-prereqs`          | Optional. Download + install AS3/TS RPMs if missing.                  |
 | Pin AS3 version  | `--as3-version vX.Y.Z`       | Optional. Defaults to GitHub `latest` for `F5Networks/f5-appsvcs-extension`. |
@@ -199,11 +238,11 @@ If your BIG-IP is missing any of these, AS3 will return HTTP 422. Options:
 
 ## Limitations and known gaps
 
-- **No TS declaration support.** The validator reports whether a
-  `Telemetry_Consumer` of the expected type is configured, but does not
-  create one. Configuring a Splunk consumer (or any other) requires POSTing
-  a TS declaration to `/mgmt/shared/telemetry/declare` with credentials
-  (e.g. a Splunk HEC token). See the **Roadmap**.
+- **TS declaration creation (CLI).** The CLI still reports whether a
+  `Telemetry_Consumer` of the expected type exists, but does not POST a new
+  declaration. Use the **Web UI** (or call `BigIPClient.post_ts_declaration`
+  yourself) to push a composed consumer declaration to
+  `/mgmt/shared/telemetry/declare`.
 - **TLS verification off by default.** Lab boxes typically have self-signed
   certs; `--verify-tls` opts in to certificate validation.
 - **`--install-prereqs` requires internet access** from the workstation
@@ -220,9 +259,8 @@ If your BIG-IP is missing any of these, AS3 will return HTTP 422. Options:
 
 ### Near term
 
-- `--ts-declaration <file>`: POST a TS declaration alongside the AS3 apply,
-  with a template generator for Splunk / Datadog / Azure Log Analytics etc.
-  that takes a consumer URL and a passphrase from environment / file.
+- `--ts-declaration <file>`: POST a TS declaration from the CLI (the Web UI
+  already performs an equivalent POST for common consumers).
 - `--provision <module>:<level>`: provision an arbitrary module from the CLI
   (currently done out-of-band; the AVR provisioning flow was inlined for
   the lab session).
@@ -233,44 +271,9 @@ If your BIG-IP is missing any of these, AS3 will return HTTP 422. Options:
 
 ### Frontend UI
 
-The current shape is CLI-only with two interactive prompts (install confirm,
-AS3 apply confirm) and a small set of pure validation functions. Building a
-web UI is mostly mechanical:
-
-1. **Library extraction.** Split `bigip_ts_validator.py` into:
-   - `bigip_ts/client.py` (the `BigIPClient` class — already self-contained)
-   - `bigip_ts/validate.py` (pure functions returning the findings dict)
-   - `bigip_ts/install.py` (`resolve_github_rpm`, `download_rpm`,
-     `ensure_extensions`)
-   - `bigip_ts/cli.py` (the existing `main()`, untouched in behaviour)
-   No business logic changes — just reorganization.
-2. **HTTP service.** A thin FastAPI app would expose:
-   - `POST /api/sessions` — accept host, username, password; return a
-     short-lived session token bound to a `BigIPClient` instance kept in a
-     server-side cache (with a TTL — never log the password, never echo it).
-   - `GET /api/sessions/{id}/validate?consumer=Splunk` — call `validate()`,
-     return the findings dict (already JSON-safe).
-   - `POST /api/sessions/{id}/install-prereqs` — body specifies versions,
-     server runs `ensure_extensions` and streams progress over SSE or WS.
-   - `POST /api/sessions/{id}/apply-as3` — body is an AS3 file path or
-     uploaded declaration; server runs the post + re-validate.
-   - `POST /api/sessions/{id}/ts-declaration` — once `--ts-declaration`
-     support lands (above).
-3. **Frontend.** A small SPA (React + TanStack Query, or HTMX if you want
-   to keep it boring) with:
-   - Connection form (host, user, password, consumer dropdown).
-   - Status grid mirroring the CLI report (one row per checked resource,
-     coloured `OK` / `WARN` / `MISSING`).
-   - Action buttons gated by what's missing: "Install extensions",
-     "Provision AVR", "Apply AS3", "Configure consumer".
-   - Live progress for long-running operations (install, provision) via
-     server-sent events.
-4. **Auth model.** Treat the BIG-IP password as a credential that never
-   leaves the server process. Sessions are server-side; tokens to the
-   browser are opaque. No localStorage of secrets.
-5. **Packaging.** `Dockerfile` for the FastAPI + static frontend; the RPM
-   cache directory mounted as a volume so re-installs across many BIG-IPs
-   reuse the same RPM blobs.
+Delivered as `server/app.py` + `frontend/` (see **Web UI** above). Remaining
+nice-to-haves: library split for cleaner imports, SSE for long RPM installs,
+and a packaged `Dockerfile`.
 
 ### Stretch
 

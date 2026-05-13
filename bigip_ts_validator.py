@@ -26,6 +26,9 @@ from typing import Any
 import requests
 import urllib3
 
+from as3_services import build_as3_declaration, required_as3_object_names
+from ts_declaration_builder import normalize_consumer_type
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -118,6 +121,18 @@ class BigIPClient:
         if resp.status_code >= 400:
             raise BigIPError(f"AS3 POST failed ({resp.status_code}): {resp.text}")
         return resp.json()
+
+    def post_ts_declaration(self, declaration: dict) -> dict:
+        """POST a Telemetry Streaming declaration to /mgmt/shared/telemetry/declare."""
+        resp = self._post("/mgmt/shared/telemetry/declare", declaration)
+        if resp.status_code >= 400:
+            raise BigIPError(f"TS declaration POST failed ({resp.status_code}): {resp.text[:2000]}")
+        if not (resp.text or "").strip():
+            return {}
+        try:
+            return resp.json()
+        except json.JSONDecodeError:
+            return {"_raw_text": resp.text}
 
     def upload_file(self, local_path: Path) -> str:
         """Chunk-upload a file to /var/config/rest/downloads/<name>. Returns the remote path."""
@@ -321,10 +336,23 @@ def ensure_extensions(
     return installed
 
 
-def validate(client: BigIPClient, expected_consumer: str) -> dict:
+def validate(client: BigIPClient, expected_consumer: str, services: dict[str, bool] | None = None) -> dict:
     checks: list[str] = []
     missing: list[str] = []
     warnings: list[str] = []
+
+    expected_consumer_norm = normalize_consumer_type(expected_consumer)
+
+    required_objects: list[tuple[str, str]]
+    if services is not None and not any(
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+    ):
+        missing.append(
+            "Select at least one telemetry scope (LTM, ASM, AFM, HTTP Analytics, or TCP Analytics)"
+        )
+        required_objects = []
+    else:
+        required_objects = required_as3_object_names(services)
 
     as3_info = client.extension_info("appsvcs")
     if as3_info:
@@ -341,10 +369,10 @@ def validate(client: BigIPClient, expected_consumer: str) -> dict:
     shared = _shared_block(client.as3_declaration()) if as3_info else None
     if shared is None:
         if as3_info:
-            for name, cls in REQUIRED_AS3_OBJECTS:
+            for name, cls in required_objects:
                 missing.append(f"AS3 resource missing in /Common/Shared: {name} ({cls})")
     else:
-        for name, cls in REQUIRED_AS3_OBJECTS:
+        for name, cls in required_objects:
             obj = shared.get(name)
             if isinstance(obj, dict) and obj.get("class") == cls:
                 checks.append(f"AS3 resource present: {name} ({cls})")
@@ -365,16 +393,18 @@ def validate(client: BigIPClient, expected_consumer: str) -> dict:
             consumer_status = "none configured"
         else:
             types = [c.get("type", "<no type>") for c in consumers]
-            matching = [c for c in consumers if c.get("type") == expected_consumer]
+            matching = [c for c in consumers if normalize_consumer_type(str(c.get("type", ""))) == expected_consumer_norm]
             if matching:
-                checks.append(f"TS consumer of type {expected_consumer} is configured ({len(matching)} found)")
-                consumer_status = f"{expected_consumer} configured"
+                checks.append(
+                    f"TS consumer of type {expected_consumer_norm} is configured ({len(matching)} found)"
+                )
+                consumer_status = f"{expected_consumer_norm} configured"
             else:
                 missing.append(
-                    f"TS declaration has no Telemetry_Consumer of type '{expected_consumer}' "
+                    f"TS declaration has no Telemetry_Consumer of type '{expected_consumer_norm}' "
                     f"(found: {', '.join(types) or 'none'})"
                 )
-                consumer_status = f"have [{', '.join(types)}], need {expected_consumer}"
+                consumer_status = f"have [{', '.join(types)}], need {expected_consumer_norm}"
 
     return {
         "checks": checks,
@@ -418,7 +448,8 @@ def main() -> int:
     parser.add_argument("--password", help="Password (else uses $BIGIP_PASSWORD or prompts)")
     parser.add_argument("--consumer", required=True,
                         help="Expected TS consumer type, e.g. Splunk, Azure_Log_Analytics, "
-                             "AWS_CloudWatch, Datadog, Generic_HTTP, Sumo_Logic, ElasticSearch")
+                             "AWS_CloudWatch, DataDog (Datadog accepted as alias), Generic_HTTP, "
+                             "Sumo_Logic, ElasticSearch")
     parser.add_argument("--as3-file", default=str(Path(__file__).parent / "examples" / "as3-telemetry-resources.json"),
                         help="AS3 declaration to apply when remediating")
     parser.add_argument("--no-remediate", action="store_true",

@@ -1,0 +1,150 @@
+:root {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+a {
+  color: #0369a1;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.08);
+}
+
+.card h2 {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.field {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #475569;
+}
+
+.field input,
+.field select,
+.field textarea {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.field textarea {
+  min-height: 120px;
+  font-family: ui-monospace, monospace;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.btn {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 1.1rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.btn-primary {
+  background: #0369a1;
+  color: #fff;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.banner-error {
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.report {
+  font-size: 0.85rem;
+}
+
+.report ul {
+  margin: 0.25rem 0 0 1rem;
+  padding: 0;
+}
+
+.status-ready {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.status-not {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 0.85rem;
+}
