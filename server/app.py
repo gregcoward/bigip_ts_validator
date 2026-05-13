@@ -71,10 +71,6 @@ class ServicesBody(BaseModel):
 class ValidateBody(BaseModel):
     consumer: str
     services: ServicesBody
-    include_event_listener: bool = Field(
-        default=True,
-        description="Expect AS3 local listener (Virtual+iRule) and TS Telemetry_Listener on 6514",
-    )
     include_system_poller: bool = Field(
         default=True,
         description="Expect TS System Poller in declaration (informational for validate)",
@@ -88,7 +84,6 @@ class RemediateBody(BaseModel):
     install_prereqs: bool = False
     apply_as3: bool = True
     post_ts: bool = True
-    include_event_listener: bool = True
     include_system_poller: bool = True
     as3_version: str | None = None
     ts_version: str | None = None
@@ -132,7 +127,7 @@ def session_validate(session_id: str, body: ValidateBody) -> dict[str, Any]:
         s.client,
         body.consumer,
         svc,
-        include_local_listener=body.include_event_listener,
+        include_local_listener=True,
     )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
     return findings
@@ -183,7 +178,7 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
 
     if body.apply_as3:
         try:
-            as3_decl = build_as3_declaration(svc, include_local_listener=body.include_event_listener)
+            as3_decl = build_as3_declaration(svc, include_local_listener=True)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if svc.get("asm"):
@@ -202,7 +197,7 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             ts_decl = build_ts_declaration(
                 body.consumer,
                 body.consumer_params,
-                include_event_listener=body.include_event_listener,
+                include_event_listener=True,
                 include_system_poller=body.include_system_poller,
             )
             ts_resp = s.client.post_ts_declaration(ts_decl)
@@ -214,7 +209,7 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
         s.client,
         body.consumer,
         svc,
-        include_local_listener=body.include_event_listener,
+        include_local_listener=True,
     )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
     return {"steps": steps, "findings": findings}

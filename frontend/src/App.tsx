@@ -296,7 +296,6 @@ export default function App() {
   const [params, setParams] = useState<Record<string, string>>({ protocol: "https", port: "8088" });
   const [installPrereqs, setInstallPrereqs] = useState(false);
   const [provisionModules, setProvisionModules] = useState(false);
-  const [includeListener, setIncludeListener] = useState(true);
   const [includeSystemPoller, setIncludeSystemPoller] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
@@ -336,7 +335,7 @@ export default function App() {
       const r = await fetch(api(`/api/session/${sessionId}/validate`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ consumer, services: servicesPayload, include_event_listener: includeListener, include_system_poller: includeSystemPoller }),
+        body: JSON.stringify({ consumer, services: servicesPayload, include_system_poller: includeSystemPoller }),
       });
       const data = (await r.json()) as Findings & { detail?: string };
       if (!r.ok) throw new Error((data as { detail?: string }).detail ?? r.statusText);
@@ -366,7 +365,6 @@ export default function App() {
           provision_level: "nominal",
           apply_as3: true,
           post_ts: true,
-          include_event_listener: includeListener,
           include_system_poller: includeSystemPoller,
           assume_yes: true,
         }),
@@ -548,11 +546,6 @@ export default function App() {
         <label className="check">
           <input type="checkbox" checked={installPrereqs} onChange={(e) => setInstallPrereqs(e.target.checked)} />
           Install missing AS3 / Telemetry Streaming RPMs from F5 GitHub (workstation needs internet)
-        </label>
-        <label className="check" style={{ marginTop: "0.5rem" }}>
-          <input type="checkbox" checked={includeListener} onChange={(e) => setIncludeListener(e.target.checked)} />
-          Local listener path: AS3 Virtual + iRule (255.255.255.254:6514 → 127.0.0.1:6514) and TS Telemetry_Listener on
-          port 6514 (needed for LTM/AFM HSL-style forwarding and ASM remote logging to TS on the BIG-IP)
         </label>
         <label className="check" style={{ marginTop: "0.5rem" }}>
           <input
