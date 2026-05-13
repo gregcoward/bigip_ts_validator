@@ -68,7 +68,7 @@ bigip-ts-validator/
 │   └── as3-telemetry-resources.json            # static reference (CLI default --as3-file)
 ├── agents/
 │   └── bigip-ts-validator.md
-├── rpms/                          # downloaded RPM cache (gitignored)
+├── rpms/                          # RPM cache (tracked .gitkeep; *.rpm gitignored)
 └── LICENSE
 ```
 
@@ -272,8 +272,8 @@ access to `rpms/` if operators use **Install missing AS3 / TS RPMs** from the UI
 
 The canonical unit file is **`deploy/systemd/bigip-ts-validator.service`**
 (paths assume the repo lives at **`/opt/bigip-ts-validator`**). Copy it into
-place, then edit **`User`**, **`Group`**, **`WorkingDirectory`**, **`ExecStart`**,
-and **`ReadWritePaths`** if your layout differs:
+place, then edit **`User`**, **`Group`**, **`WorkingDirectory`**, and
+**`ExecStart`** if your layout differs:
 
 ```bash
 sudo cp /opt/bigip-ts-validator/deploy/systemd/bigip-ts-validator.service /etc/systemd/system/
@@ -281,9 +281,12 @@ sudo nano /etc/systemd/system/bigip-ts-validator.service   # adjust if needed
 ```
 
 Defaults in the sample: runs as **`bigip-ts`**, binds Uvicorn to **`127.0.0.1:8000`**
-(no `--reload`), **`ProtectSystem=true`** (so **`/opt`** stays visible; **`strict`**
-would require extra path rules and often causes **`status=226/NAMESPACE`**), and
-**`ReadWritePaths=`** on **`rpms/`** for UI-driven RPM downloads.
+(no `--reload`), and **`ProtectSystem=true`** (so **`/opt`** stays visible; do not
+use **`ProtectSystem=strict`** here unless you also whitelist the whole app tree
+— otherwise you get **`status=226/NAMESPACE`**). The sample does **not** use
+**`ReadWritePaths=`** on **`rpms/`**: systemd requires that path to exist at
+start-up, and a fresh clone may not have **`rpms/`** yet; with **`true`**, the
+service user can still create **`rpms/`** on first RPM download.
 
 Install notes live in the README only: the unit file **starts with `[Unit]`** so
 systemd never sees “assignments” before a section (some versions warn on long

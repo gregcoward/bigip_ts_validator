@@ -2,8 +2,9 @@
 __pycache__/
 *.pyc
 
-# Downloaded iControl LX RPMs cached by --install-prereqs
-rpms/
+# Downloaded iControl LX RPMs cached by --install-prereqs (keep empty dir via .gitkeep)
+rpms/*
+!rpms/.gitkeep
 
 # Web UI
 frontend/node_modules/

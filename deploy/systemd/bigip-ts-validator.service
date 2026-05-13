@@ -16,7 +16,6 @@ RestartSec=5
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=true
-ReadWritePaths=/opt/bigip-ts-validator/rpms
 
 [Install]
 WantedBy=multi-user.target
