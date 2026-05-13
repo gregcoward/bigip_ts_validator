@@ -1,7 +1,7 @@
 {
     "class": "ADC",
     "schemaVersion": "3.10.0",
-    "remark": "Example depicting creation of BIG-IP module log profiles",
+    "remark": "Static AS3 reference (all profiles); UI builds subset dynamically",
     "Common": {
         "class": "Tenant",
         "Shared": {

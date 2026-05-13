@@ -2,80 +2,215 @@
 
 from __future__ import annotations
 
-import copy
-import json
-from pathlib import Path
 from typing import Any
 
-_EXAMPLES_DIR = Path(__file__).resolve().parent / "examples"
-_FULL_AS3_PATH = _EXAMPLES_DIR / "as3-telemetry-resources.json"
+# AS3 ADC schema: ``remark`` must be at most 64 characters (422 if longer).
+AS3_REMARK_MAX_LEN = 64
 
-# Shared logging pipeline (HSL → TS listener pattern)
-_BASE_OBJECT_NAMES = ("telemetry", "telemetry_hsl", "telemetry_formatted", "telemetry_publisher")
+_SCHEMA_VERSION = "3.10.0"
 
-def _load_full_template() -> dict[str, Any]:
-    data = json.loads(_FULL_AS3_PATH.read_text())
-    return data
+
+def _pool() -> dict[str, Any]:
+    return {
+        "class": "Pool",
+        "members": [
+            {
+                "enable": True,
+                "serverAddresses": ["255.255.255.254"],
+                "servicePort": 6514,
+            }
+        ],
+        "monitors": [{"bigip": "/Common/tcp"}],
+    }
+
+
+def _log_destination_hsl() -> dict[str, Any]:
+    return {
+        "class": "Log_Destination",
+        "type": "remote-high-speed-log",
+        "protocol": "tcp",
+        "pool": {"use": "telemetry"},
+    }
+
+
+def _log_destination_formatted() -> dict[str, Any]:
+    return {
+        "class": "Log_Destination",
+        "type": "splunk",
+        "forwardTo": {"use": "telemetry_hsl"},
+    }
+
+
+def _log_publisher() -> dict[str, Any]:
+    return {
+        "class": "Log_Publisher",
+        "destinations": [{"use": "telemetry_formatted"}],
+    }
+
+
+def _traffic_log_profile() -> dict[str, Any]:
+    return {
+        "class": "Traffic_Log_Profile",
+        "requestSettings": {
+            "requestEnabled": True,
+            "requestProtocol": "mds-tcp",
+            "requestPool": {"use": "telemetry"},
+            "requestTemplate": (
+                "event_source=\"request_logging\",hostname=\"$BIGIP_HOSTNAME\",client_ip=\"$CLIENT_IP\","
+                "server_ip=\"$SERVER_IP\",http_method=\"$HTTP_METHOD\",http_uri=\"$HTTP_URI\","
+                "virtual_name=\"$VIRTUAL_NAME\",event_timestamp=\"$DATE_HTTP\""
+            ),
+        },
+        "responseSettings": {
+            "responseEnabled": True,
+            "responseProtocol": "mds-tcp",
+            "responsePool": {"use": "telemetry"},
+            "responseTemplate": (
+                "event_source=\"response_logging\",hostname=\"$BIGIP_HOSTNAME\",client_ip=\"$CLIENT_IP\","
+                "server_ip=\"$SERVER_IP\",http_method=\"$HTTP_METHOD\",http_uri=\"$HTTP_URI\","
+                "virtual_name=\"$VIRTUAL_NAME\",event_timestamp=\"$DATE_HTTP\",http_statcode=\"$HTTP_STATCODE\","
+                "http_status=\"$HTTP_STATUS\",response_ms=\"$RESPONSE_MSECS\""
+            ),
+        },
+    }
+
+
+def _http_analytics_profile() -> dict[str, Any]:
+    return {
+        "class": "Analytics_Profile",
+        "collectGeo": True,
+        "collectMaxTpsAndThroughput": True,
+        "collectOsAndBrowser": True,
+        "collectIp": True,
+        "collectMethod": True,
+        "collectPageLoadTime": True,
+        "collectResponseCode": True,
+        "collectSubnet": True,
+        "collectUrl": True,
+        "collectUserAgent": True,
+        "collectUserSession": True,
+        "publishIruleStatistics": True,
+    }
+
+
+def _tcp_analytics_profile() -> dict[str, Any]:
+    return {
+        "class": "Analytics_TCP_Profile",
+        "collectCity": True,
+        "collectContinent": True,
+        "collectCountry": True,
+        "collectNexthop": True,
+        "collectPostCode": True,
+        "collectRegion": True,
+        "collectRemoteHostIp": True,
+        "collectRemoteHostSubnet": True,
+        "collectedByServerSide": True,
+    }
+
+
+def _security_log_profile(*, asm: bool, afm: bool) -> dict[str, Any] | None:
+    if not asm and not afm:
+        return None
+    body: dict[str, Any] = {"class": "Security_Log_Profile"}
+    if asm:
+        body["application"] = {
+            "localStorage": False,
+            "remoteStorage": "splunk",
+            "servers": [{"address": "255.255.255.254", "port": "6514"}],
+            "storageFilter": {"requestType": "all"},
+        }
+    if afm:
+        body["network"] = {
+            "publisher": {"use": "telemetry_publisher"},
+            "logRuleMatchAccepts": False,
+            "logRuleMatchRejects": True,
+            "logRuleMatchDrops": True,
+            "logIpErrors": True,
+            "logTcpErrors": True,
+            "logTcpEvents": True,
+        }
+    return body
+
+
+def _needs_hsl_chain(services: dict[str, bool]) -> bool:
+    """Pool / HSL / formatted / publisher chain is required for LTM logs and AFM network logging."""
+    return bool(services.get("ltm") or services.get("afm"))
+
+
+def _build_shared_application(services: dict[str, bool]) -> dict[str, Any]:
+    if not any(
+        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
+    ):
+        raise ValueError("At least one telemetry service must be selected")
+
+    shared: dict[str, Any] = {"class": "Application", "template": "shared"}
+
+    if _needs_hsl_chain(services):
+        shared["telemetry"] = _pool()
+        shared["telemetry_hsl"] = _log_destination_hsl()
+        shared["telemetry_formatted"] = _log_destination_formatted()
+        shared["telemetry_publisher"] = _log_publisher()
+
+    if services.get("ltm"):
+        shared["telemetry_traffic_log_profile"] = _traffic_log_profile()
+
+    if services.get("http_analytics"):
+        shared["telemetry_http_analytics_profile"] = _http_analytics_profile()
+
+    if services.get("tcp_analytics"):
+        shared["telemetry_tcp_analytics_profile"] = _tcp_analytics_profile()
+
+    sec = _security_log_profile(asm=bool(services.get("asm")), afm=bool(services.get("afm")))
+    if sec is not None:
+        shared["telemetry_asm_security_log_profile"] = sec
+
+    return shared
 
 
 def required_as3_object_names(services: dict[str, bool] | None) -> list[tuple[str, str]]:
     """Return (name, AS3 class) pairs that must exist for the given service selection.
 
-    When ``services`` is None, require every object from the full reference template
-    (CLI backward compatibility).
+    When ``services`` is None, use the same rules as **all** logging options enabled
+    (CLI default scope against the full bundled example declaration).
     """
     if services is None:
-        tmpl = _load_full_template()
-        shared = tmpl["Common"]["Shared"]
-        out: list[tuple[str, str]] = []
-        for name, body in shared.items():
-            if isinstance(body, dict) and "class" in body and name.startswith("telemetry"):
-                if name in ("telemetry_local_rule", "telemetry_local"):
-                    continue
-                out.append((name, body["class"]))
-        return sorted(out, key=lambda x: x[0])
+        services = {
+            "ltm": True,
+            "asm": True,
+            "afm": True,
+            "http_analytics": True,
+            "tcp_analytics": True,
+        }
 
-    active = any(
+    if not any(
         services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
-    )
-    if not active:
+    ):
         return []
 
-    tmpl = _load_full_template()
-    shared = tmpl["Common"]["Shared"]
-    result: list[tuple[str, str]] = []
-    for name in _BASE_OBJECT_NAMES:
-        obj = shared.get(name)
-        if isinstance(obj, dict) and "class" in obj:
-            result.append((name, obj["class"]))
-
+    pairs: list[tuple[str, str]] = []
+    if _needs_hsl_chain(services):
+        pairs.extend(
+            [
+                ("telemetry", "Pool"),
+                ("telemetry_hsl", "Log_Destination"),
+                ("telemetry_formatted", "Log_Destination"),
+                ("telemetry_publisher", "Log_Publisher"),
+            ]
+        )
     if services.get("ltm"):
-        o = shared.get("telemetry_traffic_log_profile")
-        if isinstance(o, dict):
-            result.append(("telemetry_traffic_log_profile", o["class"]))
+        pairs.append(("telemetry_traffic_log_profile", "Traffic_Log_Profile"))
     if services.get("http_analytics"):
-        o = shared.get("telemetry_http_analytics_profile")
-        if isinstance(o, dict):
-            result.append(("telemetry_http_analytics_profile", o["class"]))
+        pairs.append(("telemetry_http_analytics_profile", "Analytics_Profile"))
     if services.get("tcp_analytics"):
-        o = shared.get("telemetry_tcp_analytics_profile")
-        if isinstance(o, dict):
-            result.append(("telemetry_tcp_analytics_profile", o["class"]))
+        pairs.append(("telemetry_tcp_analytics_profile", "Analytics_TCP_Profile"))
     if services.get("asm") or services.get("afm"):
-        o = shared.get("telemetry_asm_security_log_profile")
-        if isinstance(o, dict):
-            result.append(("telemetry_asm_security_log_profile", o["class"]))
+        pairs.append(("telemetry_asm_security_log_profile", "Security_Log_Profile"))
 
-    return result
-
-
-# AS3 ADC schema: ``remark`` must be at most 64 characters (422 if longer).
-AS3_REMARK_MAX_LEN = 64
+    return pairs
 
 
 def remark_for_services(services: dict[str, bool]) -> str:
     """Human-readable but schema-safe remark for the ADC declaration."""
-    # Short tags keep all five services under the limit (unlike full key names).
     tag_map = {
         "ltm": "ltm",
         "asm": "asm",
@@ -92,32 +227,18 @@ def remark_for_services(services: dict[str, bool]) -> str:
 
 
 def build_as3_declaration(services: dict[str, bool]) -> dict[str, Any]:
-    """Return a full ADC declaration for /mgmt/shared/appsvcs/declare."""
-    tmpl = copy.deepcopy(_load_full_template())
-    shared: dict[str, Any] = tmpl["Common"]["Shared"]
+    """Return a full ADC declaration for /mgmt/shared/appsvcs/declare.
 
-    if not any(
-        services.get(k, False) for k in ("ltm", "asm", "afm", "http_analytics", "tcp_analytics")
-    ):
-        raise ValueError("At least one telemetry service must be selected")
-
-    tmpl["remark"] = remark_for_services(services)
-
-    if not services.get("ltm"):
-        shared.pop("telemetry_traffic_log_profile", None)
-    if not services.get("http_analytics"):
-        shared.pop("telemetry_http_analytics_profile", None)
-    if not services.get("tcp_analytics"):
-        shared.pop("telemetry_tcp_analytics_profile", None)
-
-    sec = shared.get("telemetry_asm_security_log_profile")
-    if isinstance(sec, dict) and (services.get("asm") or services.get("afm")):
-        if not services.get("asm"):
-            sec.pop("application", None)
-        if not services.get("afm"):
-            sec.pop("network", None)
-    elif not services.get("asm") and not services.get("afm"):
-        shared.pop("telemetry_asm_security_log_profile", None)
-
-    return tmpl
-
+    Objects under ``/Common/Shared`` are created only for the selected
+    telemetry sources (LTM request/response logging, ASM / AFM security log
+    profiles, HTTP / TCP analytics profiles). The HSL → pool chain is included
+    only when LTM or AFM logging is selected (AFM ``network`` logging uses the
+    log publisher).
+    """
+    shared = _build_shared_application(services)
+    return {
+        "class": "ADC",
+        "schemaVersion": _SCHEMA_VERSION,
+        "remark": remark_for_services(services),
+        "Common": {"class": "Tenant", "Shared": shared},
+    }

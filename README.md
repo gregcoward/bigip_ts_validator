@@ -12,8 +12,9 @@ The validator:
 - Walks the active TS declaration looking for a `Telemetry_Consumer` whose
   `type` matches the expected consumer
 - (Optional) installs missing iControl LX extensions from F5 GitHub releases
-- (Optional) POSTs a bundled AS3 declaration to create the missing logging
-  resources
+- (Optional) POSTs an AS3 declaration to create logging resources (the **Web UI**
+  builds this declaration dynamically from selected LTM / ASM / AFM / analytics
+  options; the CLI uses `--as3-file`, defaulting to the static example under `examples/`)
 - **Web UI:** optional validate + remediate workflow that can also POST a TS
   declaration to `/mgmt/shared/telemetry/declare` for supported consumers
 
@@ -35,7 +36,6 @@ what changed.
 - [Usage](#usage)
   - [Validate only](#validate-only)
   - [Validate, install missing extensions, apply AS3](#validate-install-missing-extensions-apply-as3)
-  - [Use the AFM-free AS3 variant](#use-the-afm-free-as3-variant)
 - [Workflow steps](#workflow-steps)
 - [What is validated](#what-is-validated)
 - [Exit codes](#exit-codes)
@@ -53,15 +53,14 @@ what changed.
 ```
 bigip-ts-validator/
 ├── bigip_ts_validator.py          # CLI + library (BigIPClient, validate, ensure_extensions)
-├── as3_services.py                # Service-scoped AS3 builder + required object list
+├── as3_services.py                # Dynamic AS3 builder + required object list
 ├── ts_declaration_builder.py      # TS declaration composer (consumers)
 ├── server/app.py                  # FastAPI session API
 ├── run_server.py                  # `uvicorn` entrypoint
 ├── frontend/                      # React (Vite) SPA
 ├── requirements.txt
 ├── examples/
-│   ├── as3-telemetry-resources.json
-│   └── as3-telemetry-resources-no-afm.json
+│   └── as3-telemetry-resources.json            # static reference (CLI default --as3-file)
 ├── agents/
 │   └── bigip-ts-validator.md
 ├── rpms/                          # downloaded RPM cache (gitignored)
@@ -160,11 +159,9 @@ Examples:
   - PATCH `/mgmt/tm/sys/provision/<module>` (only if you provision modules)
   - POST to `/mgmt/shared/appsvcs/declare` (AS3)
   - GET `/mgmt/shared/telemetry/declare` (TS, read-only here)
-- Modules: at minimum LTM. The bundled AS3 examples reference:
-  - `Analytics_Profile` + `Analytics_TCP_Profile` → require **AVR** provisioned
-  - `Security_Log_Profile.application` → requires **ASM** provisioned
-  - `Security_Log_Profile.network` → requires **AFM** provisioned
-  See **Module compatibility** below.
+- Modules: at minimum **LTM**. Depending on what you deploy, you may also need
+  **AVR** (HTTP/TCP analytics), **ASM** (application security logging), and/or
+  **AFM** (network security logging). See **Module compatibility** below.
 
 ## Installation
 
@@ -187,7 +184,8 @@ Analytics), choose a [Telemetry Streaming push consumer](https://clouddocs.f5.co
 fill in consumer-specific parameters (HEC token, workspace keys, and so on),
 validate readiness, and optionally install extensions, **provision TMOS modules**
 (AVR when HTTP/TCP analytics are selected, ASM/AFM when those sources are selected),
-POST the filtered AS3 declaration, and POST a composed TS declaration.
+POST an **AS3 declaration generated only for the telemetry options you checked** (no
+extra logging profiles), and POST a composed TS declaration.
 
 **Security model:** the BIG-IP password is sent once to this application's Python
 process over HTTPS to your workstation. It is kept only in an in-memory session
@@ -248,14 +246,6 @@ export BIGIP_PASSWORD='...'
     --install-prereqs --yes
 ```
 
-### Use the AFM-free AS3 variant
-
-```bash
-.venv/bin/python bigip_ts_validator.py \
-    --host 10.0.0.10 --username admin --consumer Splunk \
-    --as3-file examples/as3-telemetry-resources-no-afm.json --yes
-```
-
 ## Workflow steps
 
 1. **Authenticate** — POST `/mgmt/shared/authn/login`. The returned token is
@@ -291,7 +281,12 @@ export BIGIP_PASSWORD='...'
 
 ## What is validated
 
-Required objects in `/Common/Shared`:
+Depending on context, the tool checks only the AS3 objects that should exist for
+your **selected telemetry sources** (Web UI and API), or—when you use the CLI
+without a service scope—the full set matching the default `--as3-file` example
+(all LTM / ASM / AFM / analytics profiles below).
+
+Possible objects under `/Common/Shared` (subset required per selection):
 
 | Object                                  | Class                  |
 |-----------------------------------------|------------------------|
@@ -323,22 +318,22 @@ Optional objects (only needed for the TS "local listener" pattern, missing is a 
 
 ## Module compatibility
 
-The default `examples/as3-telemetry-resources.json` requires three modules
-to be provisioned beyond LTM:
+The **Web UI** and remediation API build AS3 **only for the options you select**
+(for example, AFM logging objects are omitted if AFM is unchecked, so you do
+not need a separate “AFM-free” declaration file).
 
-- **AVR** — for `Analytics_Profile` and `Analytics_TCP_Profile`
-- **ASM** — for the `application` block of `Security_Log_Profile`
-- **AFM** — for the `network` block of `Security_Log_Profile`
+If you still use the CLI with the default `examples/as3-telemetry-resources.json`,
+that static file includes **AVR**, **ASM**, and **AFM**-dependent objects together.
+AS3 returns HTTP **422** if a referenced module is not provisioned on the box.
 
-If your BIG-IP is missing any of these, AS3 will return HTTP 422. Options:
+Mitigations:
 
-- Provision the missing module (PATCH `/mgmt/tm/sys/provision/<m>` with
-  `{"level": "nominal"}`). This causes a 1-2 minute REST/TMM restart and may
-  exceed the CPU/RAM budget on small vBIG-IPs.
-- Use `examples/as3-telemetry-resources-no-afm.json`, which drops just the
-  AFM-dependent `network` block from the security log profile.
-- Create your own AS3 variant for any other module combination and point
-  `--as3-file` at it.
+- **Web UI:** clear telemetry sources you are not licensed for, enable **Provision
+  required TMOS modules** when remediating, or provision modules yourself.
+- **CLI:** supply your own `--as3-file` that matches the modules on the device, or
+  provision missing modules (PATCH `/mgmt/tm/sys/provision/<m>` with
+  `{"level": "nominal"}`). Provisioning causes a short REST/TMM restart and may
+  exceed CPU/RAM on small vBIG-IPs.
 
 ## Limitations and known gaps
 
@@ -383,8 +378,8 @@ and a packaged `Dockerfile`.
 
 - Fleet view (validate N BIG-IPs in parallel, group by readiness state).
 - Optional integration with F5 BIG-IQ for credentials and inventory.
-- Compatibility matrix view: show which AS3 variant + module set will work
-  for a given device, based on what's provisioned.
+- Compatibility matrix view: show which telemetry source and module combination
+  will work for a given device, based on what is provisioned.
 
 ## Contributing
 
