@@ -45,10 +45,82 @@ bigip-ts-validator/
 
 ### Workstation
 
-- Python 3.10 or newer
+- Python 3.10 or newer (see [Installing prerequisites](#installing-prerequisites-on-linux-and-macos) for OS packages)
+- For the **Web UI**: Node.js **18+** and `npm` to build `frontend/`
 - Network reachability to the BIG-IP management interface (port 443)
 - For `--install-prereqs`: outbound HTTPS to `api.github.com` and
   `github.com` to fetch RPMs (about ~55 MB combined for AS3 + TS)
+
+### Installing prerequisites on Linux and macOS
+
+Everything below is on the machine where you run the validator (laptop, jump
+host, or CI agent), not on the BIG-IP.
+
+**Common (CLI only)**
+
+- **Git** — to clone the repository.
+- **Python 3.10+** with **pip** and the **venv** module so you can run:
+  `python3 -m venv .venv` then `.venv/bin/pip install -r requirements.txt`.
+
+**macOS**
+
+- Install Python 3.10+ using the [python.org macOS installer](https://www.python.org/downloads/macos/) or [Homebrew](https://brew.sh/):  
+  `brew install python@3.12`  
+  Then use that interpreter for the venv, for example:  
+  `/opt/homebrew/opt/python@3.12/bin/python3 -m venv .venv`  
+  (on Intel Homebrew, `/usr/local/opt/python@3.12/bin/python3` is typical).
+- If `python3 -m venv` fails with *ensurepip is not available*, install a full
+  Python from python.org or Homebrew; the system `/usr/bin/python3` on some
+  macOS versions is stripped and not suitable for venvs.
+- **Web UI only:** install **Node.js 18+** (LTS recommended), e.g.  
+  `brew install node`  
+  or the installer from [nodejs.org](https://nodejs.org/). You need `npm` for
+  `cd frontend && npm install && npm run build`.
+
+**Debian and Ubuntu**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
+python3 --version   # should be 3.10 or newer
+```
+
+If `python3` is older than 3.10, use [deadsnakes](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) or install Python from python.org, then create the venv with that binary.
+
+For the Web UI, install a current Node.js (distribution packages are often too old). Typical options: install **nvm** and then `nvm install --lts`, or follow [NodeSource](https://github.com/nodesource/distributions) for your Ubuntu/Debian release, or install the Linux binary from [nodejs.org](https://nodejs.org/).
+
+**RHEL, Fedora, AlmaLinux, Rocky Linux**
+
+```bash
+# Fedora / RHEL 8+ with dnf
+sudo dnf install -y git curl python3 python3-pip
+python3 --version
+```
+
+On some images the venv module is separate:
+
+```bash
+sudo dnf install -y python3-virtualenv   # or: python3 -m ensurepip --user (if available)
+python3 -m venv .venv
+```
+
+Amazon Linux 2 example:
+
+```bash
+sudo yum install -y git python3 python3-pip
+python3 -m venv .venv   # if this fails: sudo yum install -y python3-virtualenv
+```
+
+Install Node.js for the Web UI via [nvm](https://github.com/nvm-sh/nvm), NodeSource, or the official tarball from nodejs.org. Distro `nodejs` packages may be below 18.
+
+**Minimal / container images**
+
+If `pip install -r requirements.txt` fails while building wheels (e.g. for
+`pydantic-core`), install a compiler toolchain and Python headers, then retry.
+Examples:
+
+- Debian/Ubuntu: `sudo apt-get install -y build-essential python3-dev`
+- RHEL/Fedora: `sudo dnf install -y gcc python3-devel`
 
 ### BIG-IP
 
@@ -69,12 +141,16 @@ bigip-ts-validator/
 
 ## Installation
 
+Install [host prerequisites](#installing-prerequisites-on-linux-and-macos) first, then:
+
 ```bash
 git clone https://github.com/gregcoward/bigip_ts_validator.git
 cd bigip_ts_validator
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
+
+If your clone directory name differs, use that path in the commands below.
 
 ### Web UI (React + FastAPI)
 
@@ -93,14 +169,14 @@ a trusted management network.
 
 ```bash
 # Terminal 1 — API (serves built UI from frontend/dist when present)
-cd bigip-ts-validator
+cd bigip_ts_validator
 .venv/bin/pip install -r requirements.txt
 cd frontend && npm install && npm run build && cd ..
 .venv/bin/python run_server.py
 # Open http://127.0.0.1:8000 when frontend/dist exists, else use Terminal 2.
 
 # Terminal 2 — optional hot-reload UI during development
-cd bigip-ts-validator/frontend
+cd bigip_ts_validator/frontend
 npm run dev
 # Vite proxies /api to http://127.0.0.1:8000
 ```
