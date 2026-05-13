@@ -281,8 +281,13 @@ sudo nano /etc/systemd/system/bigip-ts-validator.service   # adjust if needed
 ```
 
 Defaults in the sample: runs as **`bigip-ts`**, binds Uvicorn to **`127.0.0.1:8000`**
-(no `--reload`), and sets optional hardening with **`ReadWritePaths=`** on **`rpms/`**
-for UI-driven RPM downloads.
+(no `--reload`), **`ProtectSystem=true`** (so **`/opt`** stays visible; **`strict`**
+would require extra path rules and often causes **`status=226/NAMESPACE`**), and
+**`ReadWritePaths=`** on **`rpms/`** for UI-driven RPM downloads.
+
+Install notes live in the README only: the unit file **starts with `[Unit]`** so
+systemd never sees “assignments” before a section (some versions warn on long
+comment blocks before the first header).
 
 To listen on **all interfaces**, change **`--host 127.0.0.1`** to **`--host 0.0.0.0`**
 in **`ExecStart`** and restrict access with **firewall** rules.
@@ -303,6 +308,13 @@ curl -sS http://127.0.0.1:8000/api/health
 
 Open **`http://127.0.0.1:8000/`** in a browser on the same host (or tunnel via
 SSH: `ssh -L 8000:127.0.0.1:8000 user@server`).
+
+If **`status`** shows **`code=exited, status=226/NAMESPACE`**, you were likely on
+an older sample using **`ProtectSystem=strict`** without whitelisting the app tree.
+Re-copy **`deploy/systemd/bigip-ts-validator.service`**, run **`systemctl
+daemon-reload`**, then **`systemctl restart`**. Use **`journalctl -u
+bigip-ts-validator.service -b`** for Python tracebacks (missing **`venv`**, import
+errors, or permission denied on **`WorkingDirectory`**).
 
 ### 4. Logs and operations
 
