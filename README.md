@@ -32,6 +32,8 @@ what changed.
   - [BIG-IP](#big-ip)
 - [Installation](#installation)
   - [Web UI (React + FastAPI)](#web-ui-react-fastapi)
+    - [Troubleshooting: connection refused](#troubleshooting-connection-refused-in-the-browser)
+- [Run as a Linux service (systemd)](#run-as-a-linux-service-systemd)
 - [Inputs](#inputs)
 - [Usage](#usage)
   - [Validate only](#validate-only)
@@ -57,6 +59,9 @@ bigip-ts-validator/
 ├── ts_declaration_builder.py      # TS declaration composer (consumers)
 ├── server/app.py                  # FastAPI session API
 ├── run_server.py                  # `uvicorn` entrypoint
+├── deploy/
+│   └── systemd/
+│       └── bigip-ts-validator.service   # sample systemd unit (Linux service)
 ├── frontend/                      # React (Vite) SPA
 ├── requirements.txt
 ├── examples/
@@ -209,6 +214,113 @@ npm run dev
 
 API endpoints (for custom integrations): `POST /api/session`, `POST /api/session/{id}/validate`,
 `POST /api/session/{id}/remediate`, `GET /api/consumers`, `GET /api/health`.
+
+#### Troubleshooting: "connection refused" in the browser
+
+That error means **nothing is accepting TCP on the host/port you typed** (the
+HTTP client never reached FastAPI). Check the following:
+
+1. **Start the backend** from the **repository root** (so `import server.app` works):
+   `python run_server.py` or `.venv/bin/python run_server.py`. You should see
+   Uvicorn log a line like `Uvicorn running on http://0.0.0.0:8000`.
+2. **Use the right URL for how you run the UI:**
+   - **Built UI + API on one port:** after `cd frontend && npm run build`, open
+     **`http://127.0.0.1:8000/`** (same process as the API).
+   - **Vite dev UI:** run **`npm run dev`** in `frontend/` and open
+     **`http://127.0.0.1:5173/`** — not port 8000. The dev server proxies `/api`
+     to port 8000, so the API must still be running separately.
+3. **From another machine**, use the host’s LAN IP (for example `http://10.0.0.5:8000/`)
+   instead of `127.0.0.1` (that always means “this same computer”).
+4. **Wrong working directory:** if Uvicorn fails on import and exits immediately,
+   nothing listens — run again from the repo root and read the traceback.
+
+If the server is up but you only see a “UI not built” page, run
+`cd frontend && npm install && npm run build` and reload.
+
+## Run as a Linux service (systemd)
+
+These steps assume a **systemd**-based distribution (RHEL, AlmaLinux, Ubuntu
+22.04+, Debian, etc.) and that the app lives at **`/opt/bigip-ts-validator`**
+(adjust paths to match your install).
+
+### 1. Install the application and build the UI
+
+```bash
+sudo mkdir -p /opt && sudo git clone https://github.com/gregcoward/bigip_ts_validator.git /opt/bigip-ts-validator
+cd /opt/bigip-ts-validator
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install --upgrade pip
+sudo .venv/bin/pip install -r requirements.txt
+cd frontend && sudo npm ci && sudo npm run build && cd ..
+```
+
+Using `sudo` here is only for illustration; on your own hosts you may prefer a
+dedicated deployment user with write access to `/opt/bigip-ts-validator`.
+
+### 2. Create an unprivileged service account
+
+```bash
+sudo useradd --system --home /opt/bigip-ts-validator --shell /usr/sbin/nologin \
+  --user-group bigip-ts
+sudo chown -R bigip-ts:bigip-ts /opt/bigip-ts-validator
+```
+
+The service needs **read** access to the repo and `frontend/dist`, and **write**
+access to `rpms/` if operators use **Install missing AS3 / TS RPMs** from the UI.
+
+### 3. Install a systemd unit
+
+The canonical unit file is **`deploy/systemd/bigip-ts-validator.service`**
+(paths assume the repo lives at **`/opt/bigip-ts-validator`**). Copy it into
+place, then edit **`User`**, **`Group`**, **`WorkingDirectory`**, **`ExecStart`**,
+and **`ReadWritePaths`** if your layout differs:
+
+```bash
+sudo cp /opt/bigip-ts-validator/deploy/systemd/bigip-ts-validator.service /etc/systemd/system/
+sudo nano /etc/systemd/system/bigip-ts-validator.service   # adjust if needed
+```
+
+Defaults in the sample: runs as **`bigip-ts`**, binds Uvicorn to **`127.0.0.1:8000`**
+(no `--reload`), and sets optional hardening with **`ReadWritePaths=`** on **`rpms/`**
+for UI-driven RPM downloads.
+
+To listen on **all interfaces**, change **`--host 127.0.0.1`** to **`--host 0.0.0.0`**
+in **`ExecStart`** and restrict access with **firewall** rules.
+
+Reload systemd and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now bigip-ts-validator.service
+sudo systemctl status bigip-ts-validator.service
+```
+
+Verify locally:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/health
+```
+
+Open **`http://127.0.0.1:8000/`** in a browser on the same host (or tunnel via
+SSH: `ssh -L 8000:127.0.0.1:8000 user@server`).
+
+### 4. Logs and operations
+
+```bash
+sudo journalctl -u bigip-ts-validator.service -f       # follow logs
+sudo systemctl restart bigip-ts-validator.service     # after code or dependency updates
+```
+
+After `git pull` or changing Python dependencies, run **`pip install -r
+requirements.txt`** (and **`npm run build`** if the frontend changed), then
+**`systemctl restart`**.
+
+### 5. Optional: reverse proxy
+
+For TLS termination, path prefixes, or exposing on ports 80/443, put **nginx**,
+**Caddy**, or another reverse proxy in front of Uvicorn and proxy to
+`http://127.0.0.1:8000`. Keep the API bound to loopback unless the proxy and
+network path are trusted.
 
 ## Inputs
 

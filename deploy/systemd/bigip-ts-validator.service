@@ -1,0 +1,36 @@
+# Sample systemd unit for the FastAPI app + static Web UI (see README:
+# "Run as a Linux service (systemd)").
+#
+# Install (after cloning to /opt/bigip-ts-validator and building frontend/dist):
+#   sudo cp deploy/systemd/bigip-ts-validator.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bigip-ts-validator.service
+#
+# If your install path is not /opt/bigip-ts-validator, edit WorkingDirectory,
+# ExecStart, User, Group, and ReadWritePaths before enabling.
+
+[Unit]
+Description=BIG-IP Telemetry Streaming validator (API + static Web UI)
+Documentation=https://github.com/gregcoward/bigip_ts_validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bigip-ts
+Group=bigip-ts
+WorkingDirectory=/opt/bigip-ts-validator
+Environment=PATH=/opt/bigip-ts-validator/.venv/bin:/usr/local/bin:/usr/bin:/bin
+# Production: no --reload. Bind to localhost unless behind a trusted reverse proxy.
+ExecStart=/opt/bigip-ts-validator/.venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Optional hardening (comment out if the service fails to start on your distro)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/bigip-ts-validator/rpms
+
+[Install]
+WantedBy=multi-user.target

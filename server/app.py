@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -85,6 +86,7 @@ class RemediateBody(BaseModel):
     ts_version: str | None = None
     provision_modules: bool = False
     provision_level: str = Field(default="nominal", description="TMOS provision level (usually nominal)")
+    assume_yes: bool = True
 
 
 app = FastAPI(title="BIG-IP Telemetry Streaming helper", version="1.0.0")
@@ -229,3 +231,35 @@ def create_app() -> FastAPI:
 _UI_DIST = REPO_ROOT / "frontend" / "dist"
 if _UI_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="frontend")
+else:
+
+    @app.get("/", include_in_schema=False)
+    def _ui_not_built() -> HTMLResponse:
+        dist_path = _UI_DIST.resolve()
+        return HTMLResponse(
+            content=(
+                "<!DOCTYPE html>\n"
+                '<html lang="en"><head><meta charset="utf-8"/><title>UI not built</title></head>\n'
+                '<body style="font-family:system-ui;max-width:42rem;margin:2rem;line-height:1.5">\n'
+                "<h1>Static UI has not been built yet</h1>\n"
+                "<p>The API is running, but <code>frontend/dist</code> is missing, so there is no "
+                "bundled React app to serve from this port.</p>\n"
+                "<p><strong>Fix (pick one):</strong></p>\n"
+                "<ol>\n"
+                "<li><strong>Production-style (single port):</strong> from the repo root run:<br/>\n"
+                "<pre style=\"background:#f4f4f5;padding:0.75rem;overflow:auto\">cd frontend &amp;&amp; npm install "
+                "&amp;&amp; npm run build &amp;&amp; cd ..\n"
+                ".venv/bin/python run_server.py</pre>\n"
+                "Then open <a href=\"/\">/</a> again (default <code>http://127.0.0.1:8000/</code>).</li>\n"
+                "<li><strong>Development (two processes):</strong> Terminal A: "
+                "<code>.venv/bin/python run_server.py</code> (API on port 8000). "
+                "Terminal B: <code>cd frontend &amp;&amp; npm run dev</code> — open "
+                "<strong>http://127.0.0.1:5173/</strong> (Vite proxies <code>/api</code> to port 8000).</li>\n"
+                "</ol>\n"
+                '<p>API check: <a href="/api/health"><code>GET /api/health</code></a> · '
+                '<a href="/docs">OpenAPI docs</a></p>\n'
+                f'<p style="color:#666">Expected dist directory:<br/><code>{dist_path}</code></p>\n'
+                "</body></html>"
+            ),
+            status_code=200,
+        )

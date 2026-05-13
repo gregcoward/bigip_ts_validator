@@ -4,6 +4,9 @@
 import uvicorn
 
 if __name__ == "__main__":
+    print("Starting API on http://0.0.0.0:8000  (try http://127.0.0.1:8000/ locally)")
+    print("If the UI shows 'not built', run: cd frontend && npm install && npm run build")
+    print("Dev UI with hot reload: cd frontend && npm run dev  →  http://127.0.0.1:5173/")
     uvicorn.run(
         "server.app:app",
         host="0.0.0.0",
