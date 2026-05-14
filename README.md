@@ -1,4 +1,4 @@
-# BIG-IP Telemetry Streaming Validator/Configurator
+# bigip-ts-validator
 
 Validate (and optionally remediate) a F5 BIG-IP for F5 Telemetry Streaming (TS)
 readiness against a named third-party consumer (Splunk, Azure Log Analytics,
@@ -32,7 +32,6 @@ what changed.
   - [BIG-IP](#big-ip)
 - [Installation](#installation)
   - [Web UI (React + FastAPI)](#web-ui-react-fastapi)
-    - [Troubleshooting: connection refused](#troubleshooting-connection-refused-in-the-browser)
 - [Run as a Linux service (systemd)](#run-as-a-linux-service-systemd)
 - [Inputs](#inputs)
 - [Usage](#usage)
@@ -163,7 +162,9 @@ Examples:
   - POST to `/mgmt/shared/iapp/package-management-tasks` (for `--install-prereqs`)
   - PATCH `/mgmt/tm/sys/provision/<module>` (only if you provision modules)
   - POST to `/mgmt/shared/appsvcs/declare` (AS3)
-  - GET `/mgmt/shared/telemetry/declare` (TS, read-only here)
+  - GET `/mgmt/shared/telemetry/declare` (TS, read-only validation)
+  - POST to `/mgmt/tm/sys/config` with `command: save` (after AVR analytics
+    global-settings in Web UI remediation)
 - Modules: at minimum **LTM**. Depending on what you deploy, you may also need
   **AVR** (HTTP/TCP analytics), **ASM** (application security logging),
   **AFM** (network security logging), and/or **GTM/DNS** (when using DNS logging
@@ -215,28 +216,6 @@ npm run dev
 
 API endpoints (for custom integrations): `POST /api/session`, `POST /api/session/{id}/validate`,
 `POST /api/session/{id}/remediate`, `GET /api/consumers`, `GET /api/health`.
-
-#### Troubleshooting: "connection refused" in the browser
-
-That error means **nothing is accepting TCP on the host/port you typed** (the
-HTTP client never reached FastAPI). Check the following:
-
-1. **Start the backend** from the **repository root** (so `import server.app` works):
-   `python run_server.py` or `.venv/bin/python run_server.py`. You should see
-   Uvicorn log a line like `Uvicorn running on http://0.0.0.0:8000`.
-2. **Use the right URL for how you run the UI:**
-   - **Built UI + API on one port:** after `cd frontend && npm run build`, open
-     **`http://127.0.0.1:8000/`** (same process as the API).
-   - **Vite dev UI:** run **`npm run dev`** in `frontend/` and open
-     **`http://127.0.0.1:5173/`** — not port 8000. The dev server proxies `/api`
-     to port 8000, so the API must still be running separately.
-3. **From another machine**, use the host’s LAN IP (for example `http://10.0.0.5:8000/`)
-   instead of `127.0.0.1` (that always means “this same computer”).
-4. **Wrong working directory:** if Uvicorn fails on import and exits immediately,
-   nothing listens — run again from the repo root and read the traceback.
-
-If the server is up but you only see a “UI not built” page, run
-`cd frontend && npm install && npm run build` and reload.
 
 ## Run as a Linux service (systemd)
 
@@ -481,6 +460,30 @@ next, and each PATCH **retries** (with backoff) while the device reports a busy
 state. If you still see this after other admin activity, wait until the BIG-IP
 finishes its current provisioning cycle, then run **validate + remediate** again.
 
+**AVR and Telemetry Streaming (F5 guidance):** F5 documents pointing AVR at the
+TS Log Publisher in [Modifying AVR configuration to use the Log
+Publisher](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher)
+(**Exporting data from AVR**). That page lists prerequisites (AVR provisioned,
+TS **Event Listener** with an existing Log Publisher—see [Event Listener /
+logging sources](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/event-listener.html),
+analytics profiles on virtual servers) and the **tmsh** form:
+
+`modify analytics global-settings { external-logging-publisher /Common/telemetry_publisher offbox-protocol hsl use-offbox enabled }`
+
+(use your publisher’s full path if the name differs).
+
+When you enable **HTTP Analytics** or **TCP Analytics** here and remediation runs
+**Apply AS3**, the Web UI path **PATCHes**
+[`/mgmt/tm/analytics/global-settings`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_analytics_global-settings.html)
+with **`externalLoggingPublisher`**, **`useHsl`**, and **`useOffbox`** (REST
+equivalent of that **tmsh** line). The default publisher is
+**`/Common/Shared/telemetry_publisher`**, matching this tool’s AS3 **Shared**
+Log Publisher. Set **`avr_log_publisher_fullpath`** on **`POST .../remediate`**
+for **`/Common/telemetry_publisher`** or any other path. It then **POSTs**
+[`/mgmt/tm/sys/config`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_sys_config.html)
+with **`{"command":"save"}`** (**`tmsh save sys config`**) so the configuration
+is written to disk.
+
 **ASM and AS3 422 (`localhost:8100`, `Connection refused`):** after provisioning
 ASM (or other restarts), AS3 may still return **422** while it queries
 `/mgmt/tm/asm/policies` through an on-box listener (often **localhost:8100**)
@@ -508,6 +511,10 @@ remediate** again without re-installing RPMs.
 - **No rollback.** AS3 is declarative so re-applying an old declaration
   reverts changes, but the script does not snapshot or restore state on
   failure.
+- **BIG-IQ / Statistics Collection.** F5 notes that if the device is managed by
+  BIG-IQ with Statistics Collection enabled, AVR configuration may be
+  overwritten to publish only to BIG-IQ, which can conflict with TS-oriented AVR
+  setup. See [Exporting data from AVR](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html).
 
 ## Roadmap
 
