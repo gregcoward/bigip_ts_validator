@@ -253,3 +253,12 @@ def build_ts_declaration(
 
     decl["TS_Consumer"] = consumer
     return decl
+
+
+def build_ts_rollback_declaration() -> dict[str, Any]:
+    """Return a TS POST body that removes all Telemetry Streaming configuration.
+
+    Per F5 *Deleting the TS configuration*, POST ``{\"class\": \"Telemetry\"}`` to
+    ``/mgmt/shared/telemetry/declare`` clears the managed declaration.
+    """
+    return {"class": "Telemetry"}

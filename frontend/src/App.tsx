@@ -391,6 +391,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [findings, setFindings] = useState<Findings | null>(null);
   const [remediation, setRemediation] = useState<{ steps: unknown[]; findings: Findings } | null>(null);
+  const [rollbackAck, setRollbackAck] = useState(false);
+  const [rollbackResult, setRollbackResult] = useState<{ steps: unknown[] } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const servicesPayload = useMemo(() => ({ ...services }), [services]);
@@ -411,6 +413,8 @@ export default function App() {
       setSessionId(data.session_id!);
       setFindings(null);
       setRemediation(null);
+      setRollbackResult(null);
+      setRollbackAck(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -468,6 +472,39 @@ export default function App() {
       if (!r.ok) throw new Error(data.detail ?? r.statusText);
       setRemediation({ steps: data.steps ?? [], findings: data.findings! });
       setFindings(data.findings!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runRollback() {
+    if (!sessionId) return;
+    if (!rollbackAck) {
+      setError("Check the box to acknowledge rollback before continuing.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await fetch(api(`/api/session/${sessionId}/rollback`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          clear_ts: true,
+          delete_as3_shared: true,
+          reset_sys_db_loopback: true,
+          reset_analytics_global_settings: true,
+          save_sys_config_after: true,
+        }),
+      });
+      const data = (await r.json()) as { detail?: string; steps?: unknown[] };
+      if (!r.ok) throw new Error(data.detail ?? r.statusText);
+      setRollbackResult({ steps: data.steps ?? [] });
+      setRemediation(null);
+      setFindings(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -689,6 +726,32 @@ export default function App() {
         </button>
       </div>
 
+      <div className="card">
+        <h2>Rollback (destructive)</h2>
+        <p className="muted">
+          Removes Telemetry Streaming configuration (POST body <code>{'{"class": "Telemetry"}'}</code> per F5 docs),{" "}
+          <strong>deletes</strong> the AS3 <code>Common/Shared</code> application this tool manages (pool, log
+          publisher, profiles, local listener virtual, etc.), sets{" "}
+          <code>tmm.tcl.rule.node.allow_loopback_addresses</code> back to <code>false</code>, disables AVR off-box / HSL
+          on analytics global-settings, then runs <code>save sys config</code>. Installed RPMs and TMOS module
+          provisioning levels are <strong>not</strong> changed.
+        </p>
+        <label className="check">
+          <input type="checkbox" checked={rollbackAck} onChange={(e) => setRollbackAck(e.target.checked)} />
+          I understand this will remove the above configuration from the connected BIG-IP.
+        </label>
+        <div className="actions" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={!sessionId || busy || !rollbackAck}
+            onClick={() => void runRollback()}
+          >
+            Rollback
+          </button>
+        </div>
+      </div>
+
       {findings && (
         <div className="card report">
           <h2>Last report</h2>
@@ -744,6 +807,13 @@ export default function App() {
         <div className="card report">
           <h2>Remediation steps</h2>
           <pre className="report-pre">{JSON.stringify(remediation.steps, null, 2)}</pre>
+        </div>
+      )}
+
+      {rollbackResult && (
+        <div className="card report">
+          <h2>Rollback steps</h2>
+          <pre className="report-pre">{JSON.stringify(rollbackResult.steps, null, 2)}</pre>
         </div>
       )}
     </div>

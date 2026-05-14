@@ -27,7 +27,7 @@ import requests
 import urllib3
 
 from as3_services import build_as3_declaration, required_as3_object_names
-from ts_declaration_builder import normalize_consumer_type
+from ts_declaration_builder import build_ts_rollback_declaration, normalize_consumer_type
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -161,6 +161,9 @@ class BigIPClient:
 
     def _put(self, path: str, body: Any) -> requests.Response:
         return self.session.put(f"{self.base_url}{path}", json=body, timeout=self.timeout)
+
+    def _delete(self, path: str) -> requests.Response:
+        return self.session.delete(f"{self.base_url}{path}", timeout=self.timeout)
 
     def provision_query(self) -> dict[str, str]:
         """Return TMOS module slug (lowercase) -> provision level (lowercase)."""
@@ -349,14 +352,14 @@ class BigIPClient:
         except json.JSONDecodeError:
             return {}
 
-    def put_sys_db_allow_loopback_tcl_rule_node(self) -> dict[str, Any]:
-        """Telemetry Streaming workaround: allow Tcl/iRule nodes to use loopback addresses.
+    def put_sys_db_allow_loopback_tcl_rule_node(self, *, allow_loopback: bool = True) -> dict[str, Any]:
+        """Set DB var ``tmm.tcl.rule.node.allow_loopback_addresses`` (TS loopback / iRule workaround).
 
-        ``PUT /mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses`` with
-        ``{"value": "true"}`` (equivalent to the documented **curl** workaround).
+        When ``allow_loopback`` is True, sets ``value`` to ``"true"``; when False, sets ``"false"``
+        (rollback).
         """
         path = "/mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses"
-        r = self._put(path, {"value": "true"})
+        r = self._put(path, {"value": "true" if allow_loopback else "false"})
         if r.status_code not in (200, 202):
             raise BigIPError(
                 f"PUT {path} failed ({r.status_code}): {r.text[:1200]}"
@@ -520,6 +523,56 @@ class BigIPClient:
             return resp.json()
         except json.JSONDecodeError:
             return {"_raw_text": resp.text}
+
+    def post_ts_clear_configuration(self) -> dict[str, Any]:
+        """Remove all Telemetry Streaming configuration (``{\"class\": \"Telemetry\"}``)."""
+        return self.post_ts_declaration(build_ts_rollback_declaration())
+
+    def delete_as3_application(self, tenant: str = "Common", application: str = "Shared") -> dict[str, Any]:
+        """DELETE an AS3 application (default ``Common`` / ``Shared`` telemetry bundle)."""
+        t = tenant.strip("/")
+        a = application.strip("/")
+        path = f"/mgmt/shared/appsvcs/declare/{t}/applications/{a}"
+        resp = self._delete(path)
+        if resp.status_code in (200, 202, 204):
+            if not (resp.text or "").strip():
+                return {"_status": resp.status_code, "_path": path}
+            try:
+                out = resp.json()
+                if isinstance(out, dict):
+                    out["_path"] = path
+                return out if isinstance(out, dict) else {"_status": resp.status_code, "_path": path}
+            except json.JSONDecodeError:
+                return {"_status": resp.status_code, "_path": path, "_raw_text": resp.text[:2000]}
+        if resp.status_code == 404:
+            return {
+                "_status": 404,
+                "_path": path,
+                "_note": "AS3 application not found (already removed or never deployed on this target).",
+            }
+        raise BigIPError(f"AS3 DELETE {path} failed ({resp.status_code}): {resp.text[:2000]}")
+
+    def reset_analytics_global_settings_offbox(self) -> dict[str, Any]:
+        """Best-effort undo of AVR off-box / HSL global-settings changes from remediation."""
+        bodies: tuple[dict[str, Any], ...] = (
+            {"useOffbox": "disabled", "useHsl": "disabled", "externalLoggingPublisher": ""},
+            {"useOffbox": "disabled", "useHsl": "disabled"},
+        )
+        paths = ("/mgmt/tm/analytics/global-settings", AVR_GLOBAL_SETTINGS_ITEM_DEFAULT)
+        last_err = ""
+        for path in paths:
+            for body in bodies:
+                r = self._patch(path, body)
+                if r.status_code in (200, 202):
+                    try:
+                        out = r.json() if r.text.strip() else {}
+                    except json.JSONDecodeError:
+                        out = {}
+                    if isinstance(out, dict):
+                        out["_rollback_patch_path"] = path
+                    return out if isinstance(out, dict) else {"_rollback_patch_path": path}
+                last_err = f"{path}: ({r.status_code}) {r.text[:800]}"
+        raise BigIPError(f"Could not reset analytics global-settings: {last_err}")
 
     def upload_file(self, local_path: Path) -> str:
         """Chunk-upload a file to /var/config/rest/downloads/<name>. Returns the remote path."""

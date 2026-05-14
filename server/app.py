@@ -102,6 +102,27 @@ class RemediateBody(BaseModel):
     )
 
 
+class RollbackBody(BaseModel):
+    confirm: bool = Field(
+        default=False,
+        description="Must be true to execute destructive rollback (safety latch)",
+    )
+    clear_ts: bool = Field(default=True, description="POST {class: Telemetry} to clear TS declaration")
+    delete_as3_shared: bool = Field(
+        default=True,
+        description="DELETE AS3 Common/Shared application (telemetry pool, publisher, profiles, local listener)",
+    )
+    reset_sys_db_loopback: bool = Field(
+        default=True,
+        description="PUT tmm.tcl.rule.node.allow_loopback_addresses back to false",
+    )
+    reset_analytics_global_settings: bool = Field(
+        default=True,
+        description="PATCH analytics global-settings to disable off-box / HSL (AVR undo)",
+    )
+    save_sys_config_after: bool = Field(default=True, description="POST save sys config after rollback changes")
+
+
 app = FastAPI(title="BIG-IP Telemetry Streaming helper", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -276,6 +297,61 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
     )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
     return {"steps": steps, "findings": findings}
+
+
+@app.post("/api/session/{session_id}/rollback")
+def session_rollback(session_id: str, body: RollbackBody) -> dict[str, Any]:
+    """Remove TS config, AS3 Shared telemetry app, and remediate-time TMOS tweaks (best-effort)."""
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Rollback refused: set confirm=true in the JSON body (safety latch).",
+        )
+    s = _get_session(session_id)
+    steps: list[dict[str, Any]] = []
+
+    if body.clear_ts:
+        try:
+            ts_resp = s.client.post_ts_clear_configuration()
+            steps.append({"step": "ts_clear_configuration", "response": ts_resp})
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.delete_as3_shared:
+        try:
+            as3_resp = s.client.delete_as3_application()
+            steps.append({"step": "as3_delete_common_shared", "response": as3_resp})
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.reset_sys_db_loopback:
+        try:
+            db_resp = s.client.put_sys_db_allow_loopback_tcl_rule_node(allow_loopback=False)
+            steps.append(
+                {
+                    "step": "sys_db_allow_loopback_disabled",
+                    "value": "false",
+                    "response": db_resp,
+                }
+            )
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.reset_analytics_global_settings:
+        try:
+            ar = s.client.reset_analytics_global_settings_offbox()
+            steps.append({"step": "analytics_global_settings_reset_offbox", "response": ar})
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.save_sys_config_after:
+        try:
+            save_resp = s.client.save_sys_config()
+            steps.append({"step": "save_sys_config", "response": save_resp})
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"steps": steps}
 
 
 @app.get("/api/consumers")
