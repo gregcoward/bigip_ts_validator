@@ -393,6 +393,8 @@ export default function App() {
   const [remediation, setRemediation] = useState<{ steps: unknown[]; findings: Findings } | null>(null);
   const [rollbackAck, setRollbackAck] = useState(false);
   const [rollbackResult, setRollbackResult] = useState<{ steps: unknown[] } | null>(null);
+  /** After a successful rollback, re-enable rollback only after a full remediate succeeds. */
+  const [rollbackDisabledUntilRemediate, setRollbackDisabledUntilRemediate] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const servicesPayload = useMemo(() => ({ ...services }), [services]);
@@ -415,6 +417,7 @@ export default function App() {
       setRemediation(null);
       setRollbackResult(null);
       setRollbackAck(false);
+      setRollbackDisabledUntilRemediate(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -472,6 +475,7 @@ export default function App() {
       if (!r.ok) throw new Error(data.detail ?? r.statusText);
       setRemediation({ steps: data.steps ?? [], findings: data.findings! });
       setFindings(data.findings!);
+      setRollbackDisabledUntilRemediate(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -505,6 +509,8 @@ export default function App() {
       setRollbackResult({ steps: data.steps ?? [] });
       setRemediation(null);
       setFindings(null);
+      setRollbackAck(false);
+      setRollbackDisabledUntilRemediate(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -801,15 +807,25 @@ export default function App() {
           on analytics global-settings, then runs <code>save sys config</code>. Installed RPMs and TMOS module
           provisioning levels are <strong>not</strong> changed.
         </p>
+        {rollbackDisabledUntilRemediate ? (
+          <p className="muted" role="status">
+            Rollback completed. Run <strong>Validate + remediate + post TS</strong> above before using rollback again.
+          </p>
+        ) : null}
         <label className="check">
-          <input type="checkbox" checked={rollbackAck} onChange={(e) => setRollbackAck(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={rollbackAck}
+            disabled={rollbackDisabledUntilRemediate}
+            onChange={(e) => setRollbackAck(e.target.checked)}
+          />
           I understand this will remove the above configuration from the connected BIG-IP.
         </label>
         <div className="actions" style={{ marginTop: "0.75rem" }}>
           <button
             type="button"
             className="btn btn-danger"
-            disabled={!sessionId || busy || !rollbackAck}
+            disabled={!sessionId || busy || !rollbackAck || rollbackDisabledUntilRemediate}
             onClick={() => void runRollback()}
           >
             Rollback
