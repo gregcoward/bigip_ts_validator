@@ -1,51 +1,46 @@
 # bigip-ts-validator
 
-Validate (and optionally remediate) a F5 BIG-IP for F5 Telemetry Streaming (TS)
-readiness against a named third-party consumer (Splunk, Azure Log Analytics,
-AWS CloudWatch, Datadog, Generic HTTP, Sumo Logic, ElasticSearch, etc.).
+Validate (and optionally remediate) an F5 BIG-IP for **Telemetry Streaming (TS)**
+readiness against a named push consumer (Splunk, Azure Log Analytics, AWS
+CloudWatch, Datadog, Sumo Logic, Generic HTTP, ElasticSearch, and others).
 
-The validator:
+**Checks**
 
-- Confirms the AS3 and Telemetry Streaming iControl LX extensions are installed
-- Verifies the AS3-managed logging resources required by the TS "local listener"
-  pattern are present in `/Common/Shared`
-- Walks the active TS declaration looking for a `Telemetry_Consumer` whose
-  `type` matches the expected consumer
-- (Optional) installs missing iControl LX extensions from F5 GitHub releases
-- (Optional) POSTs an AS3 declaration to create logging resources (the **Web UI**
-  builds this declaration dynamically from selected LTM / ASM / AFM / DNS /
-  analytics options; the CLI uses `--as3-file`, defaulting to the static example under `examples/`)
-- **Web UI:** optional validate + remediate workflow that can also POST a TS
-  declaration to `/mgmt/shared/telemetry/declare` for supported consumers
+- AS3 and TS iControl LX extensions are installed.
+- AS3-managed logging resources for the TS **local listener** pattern exist under
+  `/Common/Shared` (exact set depends on [what you select](#what-is-validated) in the Web UI, or on the CLI `--as3-file`).
+- The active TS declaration includes a `Telemetry_Consumer` whose `type`
+  matches the expected consumer.
 
-The tool is intentionally read-only by default and explicit about every
-mutation: it tells you what it's about to do, asks to confirm, and reports
-what changed.
+**Changes (only when you opt in)**
+
+- **CLI:** optional RPM install (`--install-prereqs`), optional POST of a static
+  AS3 file (`--as3-file`; default under `examples/`). The CLI **does not** POST
+  TS declarations; use the Web UI or `BigIPClient.post_ts_declaration` for that.
+- **Web UI (FastAPI):** session-based validate / remediate / **rollback** — RPMs,
+  TMOS provisioning, dynamic AS3 for selected sources, TS declaration POST, and
+  documented TS/AVR follow-ups. **Rollback** clears TS config, removes the AS3
+  `Common/Shared` application this tool manages, reverses selected TMOS tweaks,
+  then `save sys config` (RPMs and module levels stay as-is).
+
+---
 
 ## Table of contents
 
-- [Overview](#bigip-ts-validator)
 - [Repository layout](#repository-layout)
 - [Requirements](#requirements)
-  - [Workstation](#workstation)
-  - [Installing prerequisites on Linux and macOS](#installing-prerequisites-on-linux-and-macos)
-  - [BIG-IP](#big-ip)
 - [Installation](#installation)
-  - [Web UI (React + FastAPI)](#web-ui-react-fastapi)
+- [Web UI](#web-ui-react--fastapi)
 - [Run as a Linux service (systemd)](#run-as-a-linux-service-systemd)
-- [Inputs](#inputs)
-- [Usage](#usage)
-  - [Validate only](#validate-only)
-  - [Validate, install missing extensions, apply AS3](#validate-install-missing-extensions-apply-as3)
-- [Workflow steps](#workflow-steps)
+- [CLI reference](#cli-reference)
+  - [Inputs](#inputs)
+  - [Usage](#usage)
+- [How validation works](#how-validation-works)
 - [What is validated](#what-is-validated)
 - [Exit codes](#exit-codes)
 - [Module compatibility](#module-compatibility)
-- [Limitations and known gaps](#limitations-and-known-gaps)
+- [Limitations](#limitations-and-known-gaps)
 - [Roadmap](#roadmap)
-  - [Near term](#near-term)
-  - [Frontend UI](#frontend-ui)
-  - [Stretch](#stretch)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -53,21 +48,19 @@ what changed.
 
 ```
 bigip-ts-validator/
-├── bigip_ts_validator.py          # CLI + library (BigIPClient, validate, ensure_extensions)
-├── as3_services.py                # Dynamic AS3 builder + required object list
-├── ts_declaration_builder.py      # TS declaration composer (consumers)
-├── server/app.py                  # FastAPI session API
-├── run_server.py                  # `uvicorn` entrypoint
-├── deploy/
-│   └── systemd/
-│       └── bigip-ts-validator.service   # sample systemd unit (Linux service)
-├── frontend/                      # React (Vite) SPA
+├── bigip_ts_validator.py       # CLI + library (BigIPClient, validate, ensure_extensions)
+├── as3_services.py             # Dynamic AS3 builder + required object list
+├── ts_declaration_builder.py   # TS declaration composer (consumers)
+├── server/app.py               # FastAPI session API
+├── run_server.py               # uvicorn entrypoint
+├── deploy/systemd/
+│   └── bigip-ts-validator.service
+├── frontend/                   # React (Vite) SPA
 ├── requirements.txt
-├── examples/
-│   └── as3-telemetry-resources.json            # static reference (CLI default --as3-file)
-├── agents/
-│   └── bigip-ts-validator.md
-├── rpms/                          # RPM cache (tracked .gitkeep; *.rpm gitignored)
+├── examples/as3-telemetry-resources.json   # CLI default --as3-file
+├── agents/                     # agent prompt (optional)
+├── .claude/agents/             # same prompt for Claude Code (optional)
+├── rpms/                       # RPM cache (.gitkeep; *.rpm gitignored)
 └── LICENSE
 ```
 
@@ -75,104 +68,33 @@ bigip-ts-validator/
 
 ### Workstation
 
-- Python 3.10 or newer (see [Installing prerequisites](#installing-prerequisites-on-linux-and-macos) for OS packages)
-- For the **Web UI**: Node.js **18+** and `npm` to build `frontend/`
-- Network reachability to the BIG-IP management interface (port 443)
-- For `--install-prereqs`: outbound HTTPS to `api.github.com` and
-  `github.com` to fetch RPMs (about ~55 MB combined for AS3 + TS)
+- **Python 3.10+**, Git, and a venv with `pip install -r requirements.txt`.
+- **Web UI:** Node.js **18+** and `npm` (`cd frontend && npm ci && npm run build`).
+- Reachability to the BIG-IP management HTTPS port (usually **443**).
+- **`--install-prereqs`:** outbound HTTPS to `api.github.com` / `github.com`
+  (~55 MB for AS3 + TS RPMs). Air-gapped: pre-populate `rpms/` and pass
+  `--rpm-cache-dir`.
 
-### Installing prerequisites on Linux and macOS
-
-Everything below is on the machine where you run the validator (laptop, jump
-host, or CI agent), not on the BIG-IP.
-
-**Common (CLI only)**
-
-- **Git** — to clone the repository.
-- **Python 3.10+** with **pip** and the **venv** module so you can run:
-  `python3 -m venv .venv` then `.venv/bin/pip install -r requirements.txt`.
-
-**macOS**
-
-- Install Python 3.10+ using the [python.org macOS installer](https://www.python.org/downloads/macos/) or [Homebrew](https://brew.sh/):  
-  `brew install python@3.12`  
-  Then use that interpreter for the venv, for example:  
-  `/opt/homebrew/opt/python@3.12/bin/python3 -m venv .venv`  
-  (on Intel Homebrew, `/usr/local/opt/python@3.12/bin/python3` is typical).
-- If `python3 -m venv` fails with *ensurepip is not available*, install a full
-  Python from python.org or Homebrew; the system `/usr/bin/python3` on some
-  macOS versions is stripped and not suitable for venvs.
-- **Web UI only:** install **Node.js 18+** (LTS recommended), e.g.  
-  `brew install node`  
-  or the installer from [nodejs.org](https://nodejs.org/). You need `npm` for
-  `cd frontend && npm install && npm run build`.
-
-**Debian and Ubuntu**
-
-```bash
-sudo apt-get update
-sudo apt-get install -y git curl ca-certificates python3 python3-venv python3-pip
-python3 --version   # should be 3.10 or newer
-```
-
-If `python3` is older than 3.10, use [deadsnakes](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) or install Python from python.org, then create the venv with that binary.
-
-For the Web UI, install a current Node.js (distribution packages are often too old). Typical options: install **nvm** and then `nvm install --lts`, or follow [NodeSource](https://github.com/nodesource/distributions) for your Ubuntu/Debian release, or install the Linux binary from [nodejs.org](https://nodejs.org/).
-
-**RHEL, Fedora, AlmaLinux, Rocky Linux**
-
-```bash
-# Fedora / RHEL 8+ with dnf
-sudo dnf install -y git curl python3 python3-pip
-python3 --version
-```
-
-On some images the venv module is separate:
-
-```bash
-sudo dnf install -y python3-virtualenv   # or: python3 -m ensurepip --user (if available)
-python3 -m venv .venv
-```
-
-Amazon Linux 2 example:
-
-```bash
-sudo yum install -y git python3 python3-pip
-python3 -m venv .venv   # if this fails: sudo yum install -y python3-virtualenv
-```
-
-Install Node.js for the Web UI via [nvm](https://github.com/nvm-sh/nvm), NodeSource, or the official tarball from nodejs.org. Distro `nodejs` packages may be below 18.
-
-**Minimal / container images**
-
-If `pip install -r requirements.txt` fails while building wheels (e.g. for
-`pydantic-core`), install a compiler toolchain and Python headers, then retry.
-Examples:
-
-- Debian/Ubuntu: `sudo apt-get install -y build-essential python3-dev`
-- RHEL/Fedora: `sudo dnf install -y gcc python3-devel`
+**OS hints:** On Debian/Ubuntu use `python3-venv`; on RHEL-family ensure
+`python3-virtualenv` if `python3 -m venv` fails. If `pip` fails building wheels
+(e.g. `pydantic-core`), install `build-essential` + `python3-dev` (Debian) or
+`gcc` + `python3-devel` (RHEL). For Node, prefer [nvm](https://github.com/nvm-sh/nvm)
+or [nodejs.org](https://nodejs.org/) — distro `nodejs` packages are often too old.
 
 ### BIG-IP
 
-- TMOS 14.1+ (TS 1.x and AS3 3.x require relatively modern TMOS)
-- REST management interface enabled and reachable
-- An admin account with permission to:
-  - Authenticate via `/mgmt/shared/authn/login`
-  - Upload to `/mgmt/shared/file-transfer/uploads/` (for `--install-prereqs`)
-  - POST to `/mgmt/shared/iapp/package-management-tasks` (for `--install-prereqs`)
-  - PATCH `/mgmt/tm/sys/provision/<module>` (only if you provision modules)
-  - POST to `/mgmt/shared/appsvcs/declare` (AS3)
-  - GET `/mgmt/shared/telemetry/declare` (TS, read-only validation)
-  - POST to `/mgmt/tm/sys/config` with `command: save` (after AVR analytics
-    global-settings in Web UI remediation)
-- Modules: at minimum **LTM**. Depending on what you deploy, you may also need
-  **AVR** (HTTP/TCP analytics), **ASM** (application security logging),
-  **AFM** (network security logging), and/or **GTM/DNS** (when using DNS logging
-  in the Web UI). See **Module compatibility** below.
+- TMOS **14.1+** (modern AS3 / TS).
+- REST enabled; admin-equivalent account able to call (as needed for your workflow):
+  `/mgmt/shared/authn/login`, file uploads and package tasks (RPM install),
+  `/mgmt/tm/sys/provision` (optional provisioning), `/mgmt/shared/appsvcs/declare`,
+  `GET/POST /mgmt/shared/telemetry/declare`, `/mgmt/tm/analytics/global-settings`,
+  `PUT /mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses`,
+  `POST /mgmt/tm/sys/config` with `command: save` (Web UI remediate path with AVR).
+- **Modules:** at least **LTM**. Also **AVR** for HTTP/TCP analytics, **ASM** /
+  **AFM** / **GTM** when those logging sources are selected. See
+  [Module compatibility](#module-compatibility).
 
 ## Installation
-
-Install [host prerequisites](#installing-prerequisites-on-linux-and-macos) first, then:
 
 ```bash
 git clone https://github.com/gregcoward/bigip_ts_validator.git
@@ -181,373 +103,238 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-If your clone directory name differs, use that path in the commands below.
+Use your real clone path in the commands below.
 
-### Web UI (React + FastAPI)
+## Web UI (React + FastAPI)
 
-The repository includes a small browser UI to connect to a BIG-IP, pick which
-logging and analytics profiles to create (LTM, ASM, AFM, HTTP Analytics, TCP
-Analytics), choose a [Telemetry Streaming push consumer](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html),
-fill in consumer-specific parameters (HEC token, workspace keys, and so on),
-validate readiness, and optionally install extensions, **provision TMOS modules**
-(AVR when HTTP/TCP analytics are selected, ASM/AFM when those sources are selected),
-POST an **AS3 declaration generated only for the telemetry options you checked** (no
-extra logging profiles), and POST a composed TS declaration.
+Browser UI: pick telemetry sources (LTM, ASM, AFM, HTTP/TCP analytics, DNS
+logging), a [TS push consumer](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/setting-up-consumer.html),
+consumer parameters, then **Validate**, **Validate + remediate + post TS**, or
+**Rollback** (destructive; requires acknowledgement).
 
-**Security model:** the BIG-IP password is sent once to this application's Python
-process over HTTPS to your workstation. It is kept only in an in-memory session
-(about 45 minutes of idle TTL) and is never written to disk or returned in API
-responses. Run the API on `127.0.0.1` unless you intentionally expose it inside
-a trusted management network.
+**Security:** the BIG-IP password is sent to this app over TLS, held in an
+in-memory session (~45 min idle TTL), not written to API responses. Bind the API
+to `127.0.0.1` unless you trust the network path.
 
 ```bash
-# Terminal 1 — API (serves built UI from frontend/dist when present)
+# API + built UI (single port when frontend/dist exists)
 cd bigip_ts_validator
 .venv/bin/pip install -r requirements.txt
-cd frontend && npm install && npm run build && cd ..
+cd frontend && npm ci && npm run build && cd ..
 .venv/bin/python run_server.py
-# Open http://127.0.0.1:8000 when frontend/dist exists, else use Terminal 2.
+# Open http://127.0.0.1:8000/
 
-# Terminal 2 — optional hot-reload UI during development
-cd bigip_ts_validator/frontend
-npm run dev
-# Vite proxies /api to http://127.0.0.1:8000
+# Optional: Vite dev UI on :5173 (proxies /api → http://127.0.0.1:8000)
+cd frontend && npm run dev
 ```
 
-API endpoints (for custom integrations): `POST /api/session`, `POST /api/session/{id}/validate`,
-`POST /api/session/{id}/remediate`, `GET /api/consumers`, `GET /api/health`.
+**REST (integrations)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/session` | Create session (host, user, password) |
+| `POST` | `/api/session/{id}/validate` | Readiness report |
+| `POST` | `/api/session/{id}/remediate` | Install RPMs (optional), provision modules (optional), AS3, TS, TMOS tweaks |
+| `POST` | `/api/session/{id}/rollback` | TS clear + AS3 delete `Common/Shared` + undo remediate DB/analytics tweaks (`confirm: true`) |
+| `GET` | `/api/consumers` | Supported consumer types |
+| `GET` | `/api/health` | Liveness |
+
+**Long runs:** remediate can take many minutes (RPMs, provisioning, AS3, TS).
+If the browser shows a network error but work finished on the BIG-IP, raise
+**proxy read timeouts** in front of Uvicorn (e.g. nginx `proxy_read_timeout 900s;`
+for `/api`). The Vite dev proxy uses extended timeouts for `/api` in
+`frontend/vite.config.ts`.
 
 ## Run as a Linux service (systemd)
 
-These steps assume a **systemd**-based distribution (RHEL, AlmaLinux, Ubuntu
-22.04+, Debian, etc.) and that the app lives at **`/opt/bigip-ts-validator`**
-(adjust paths to match your install).
+Example layout: **`/opt/bigip-ts-validator`**. Adjust paths to match your install.
 
-### 1. Install the application and build the UI
+**1. Install and build**
 
 ```bash
 sudo mkdir -p /opt && sudo git clone https://github.com/gregcoward/bigip_ts_validator.git /opt/bigip-ts-validator
 cd /opt/bigip-ts-validator
 sudo python3 -m venv .venv
-sudo .venv/bin/pip install --upgrade pip
-sudo .venv/bin/pip install -r requirements.txt
+sudo .venv/bin/pip install --upgrade pip && sudo .venv/bin/pip install -r requirements.txt
 cd frontend && sudo npm ci && sudo npm run build && cd ..
 ```
 
-Using `sudo` here is only for illustration; on your own hosts you may prefer a
-dedicated deployment user with write access to `/opt/bigip-ts-validator`.
-
-### 2. Create an unprivileged service account
+**2. Service user**
 
 ```bash
-sudo useradd --system --home /opt/bigip-ts-validator --shell /usr/sbin/nologin \
-  --user-group bigip-ts
+sudo useradd --system --home /opt/bigip-ts-validator --shell /usr/sbin/nologin --user-group bigip-ts
 sudo chown -R bigip-ts:bigip-ts /opt/bigip-ts-validator
 ```
 
-The service needs **read** access to the repo and `frontend/dist`, and **write**
-access to `rpms/` if operators use **Install missing AS3 / TS RPMs** from the UI.
+The service user needs read access to the repo and `frontend/dist`, and write
+access to `rpms/` if operators install RPMs from the UI.
 
-### 3. Install a systemd unit
+**3. Unit file**
 
-The canonical unit file is **`deploy/systemd/bigip-ts-validator.service`**
-(paths assume the repo lives at **`/opt/bigip-ts-validator`**). Copy it into
-place, then edit **`User`**, **`Group`**, **`WorkingDirectory`**, and
-**`ExecStart`** if your layout differs:
+Copy **`deploy/systemd/bigip-ts-validator.service`** to `/etc/systemd/system/`,
+then adjust **`User`**, **`Group`**, **`WorkingDirectory`**, **`ExecStart`**.
+
+The sample uses **`ProtectSystem=true`** (not `strict` without extra paths — that
+can yield **`status=226/NAMESPACE`**). For **`0.0.0.0`**, change **`--host`** in
+**`ExecStart`** and firewall accordingly.
 
 ```bash
 sudo cp /opt/bigip-ts-validator/deploy/systemd/bigip-ts-validator.service /etc/systemd/system/
-sudo nano /etc/systemd/system/bigip-ts-validator.service   # adjust if needed
-```
-
-Defaults in the sample: runs as **`bigip-ts`**, binds Uvicorn to **`127.0.0.1:8000`**
-(no `--reload`), and **`ProtectSystem=true`** (so **`/opt`** stays visible; do not
-use **`ProtectSystem=strict`** here unless you also whitelist the whole app tree
-— otherwise you get **`status=226/NAMESPACE`**). The sample does **not** use
-**`ReadWritePaths=`** on **`rpms/`**: systemd requires that path to exist at
-start-up, and a fresh clone may not have **`rpms/`** yet; with **`true`**, the
-service user can still create **`rpms/`** on first RPM download.
-
-Install notes live in the README only: the unit file **starts with `[Unit]`** so
-systemd never sees “assignments” before a section (some versions warn on long
-comment blocks before the first header).
-
-To listen on **all interfaces**, change **`--host 127.0.0.1`** to **`--host 0.0.0.0`**
-in **`ExecStart`** and restrict access with **firewall** rules.
-
-Reload systemd and start the service:
-
-```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now bigip-ts-validator.service
-sudo systemctl status bigip-ts-validator.service
-```
-
-Verify locally:
-
-```bash
 curl -sS http://127.0.0.1:8000/api/health
 ```
 
-Open **`http://127.0.0.1:8000/`** in a browser on the same host (or tunnel via
-SSH: `ssh -L 8000:127.0.0.1:8000 user@server`).
-
-If **`status`** shows **`code=exited, status=226/NAMESPACE`**, you were likely on
-an older sample using **`ProtectSystem=strict`** without whitelisting the app tree.
-Re-copy **`deploy/systemd/bigip-ts-validator.service`**, run **`systemctl
-daemon-reload`**, then **`systemctl restart`**. Use **`journalctl -u
-bigip-ts-validator.service -b`** for Python tracebacks (missing **`venv`**, import
-errors, or permission denied on **`WorkingDirectory`**).
-
-### 4. Logs and operations
+**Logs / updates**
 
 ```bash
-sudo journalctl -u bigip-ts-validator.service -f       # follow logs
-sudo systemctl restart bigip-ts-validator.service     # after code or dependency updates
+sudo journalctl -u bigip-ts-validator.service -f
+sudo systemctl restart bigip-ts-validator.service   # after git pull, pip, or npm build
 ```
 
-After `git pull` or changing Python dependencies, run **`pip install -r
-requirements.txt`** (and **`npm run build`** if the frontend changed), then
-**`systemctl restart`**.
+**Reverse proxy:** for TLS or ports 80/443, terminate in front of Uvicorn and
+proxy to `http://127.0.0.1:8000`. Use **long read timeouts** for `/api` (see
+[Web UI](#web-ui-react--fastapi)).
 
-### 5. Optional: reverse proxy
+## CLI reference
 
-For TLS termination, path prefixes, or exposing on ports 80/443, put **nginx**,
-**Caddy**, or another reverse proxy in front of Uvicorn and proxy to
-`http://127.0.0.1:8000`. Keep the API bound to loopback unless the proxy and
-network path are trusted.
+### Inputs
 
-## Inputs
+| Input | Notes |
+|-------|--------|
+| `--host` | BIG-IP management IP or hostname (**required**). |
+| `--username` | Admin or equivalent (**required**). |
+| Password | Prefer `$BIGIP_PASSWORD`; avoid `--password` in shell history. |
+| `--consumer` | Required. e.g. `Splunk`, `Azure_Log_Analytics`, `DataDog` / `Datadog`, `Sumo_Logic`, … |
+| `--as3-file` | Default `examples/as3-telemetry-resources.json`. |
+| `--install-prereqs` | Download + install missing AS3/TS RPMs. |
+| `--as3-version` / `--ts-version` | Pin GitHub release tags (default `latest`). |
+| `--rpm-cache-dir` | Default `./rpms`. |
+| `--no-remediate` | Validate only. |
+| `--yes` | Skip install + AS3 confirmation prompts. |
+| `--verify-tls` | Verify BIG-IP certificate (off by default). |
+| `--json` | Print final findings as JSON. |
 
-| Input            | Where it goes                | Notes                                                                 |
-|------------------|------------------------------|-----------------------------------------------------------------------|
-| BIG-IP host      | `--host <ip-or-hostname>`    | Required. Management address.                                         |
-| Username         | `--username <name>`          | Required. Admin or admin-equivalent.                                  |
-| Password         | `$BIGIP_PASSWORD` (preferred), `--password`, or interactive `getpass` prompt | Avoid passing on the command line — it shows in shell history / `ps`. |
-| Consumer type    | `--consumer <Type>`          | Required. e.g. `Splunk`, `Azure_Log_Analytics`, `AWS_CloudWatch`, `DataDog` (BIG-IP spelling; `Datadog` is accepted as an alias), `Generic_HTTP`, `Sumo_Logic`, `ElasticSearch`. |
-| AS3 file         | `--as3-file <path>`          | Optional. Defaults to `examples/as3-telemetry-resources.json`.        |
-| Install prereqs  | `--install-prereqs`          | Optional. Download + install AS3/TS RPMs if missing.                  |
-| Pin AS3 version  | `--as3-version vX.Y.Z`       | Optional. Defaults to GitHub `latest` for `F5Networks/f5-appsvcs-extension`. |
-| Pin TS version   | `--ts-version vX.Y.Z`        | Optional. Defaults to GitHub `latest` for `F5Networks/f5-telemetry-streaming`. |
-| RPM cache dir    | `--rpm-cache-dir <path>`     | Optional. Defaults to `./rpms`.                                       |
-| Mode             | `--no-remediate` / `--yes`   | `--no-remediate` is read-only. `--yes` skips both install and AS3 confirmations. |
-| TLS              | `--verify-tls`               | Optional. Off by default since lab boxes usually have self-signed certs. |
-| Output           | `--json`                     | Optional. Append the final findings as JSON to stdout.                |
-
-## Usage
-
-### Validate only
+### Usage
 
 ```bash
 export BIGIP_PASSWORD='...'
+
+# Validate only
 .venv/bin/python bigip_ts_validator.py \
-    --host 10.0.0.10 --username admin --consumer Splunk --no-remediate
+  --host 10.0.0.10 --username admin --consumer Splunk --no-remediate
+
+# Validate + install RPMs + apply static AS3 (prompts unless --yes)
+.venv/bin/python bigip_ts_validator.py \
+  --host 10.0.0.10 --username admin --consumer Splunk \
+  --install-prereqs --yes
 ```
 
-### Validate, install missing extensions, apply AS3
+## How validation works
 
-```bash
-export BIGIP_PASSWORD='...'
-.venv/bin/python bigip_ts_validator.py \
-    --host 10.0.0.10 --username admin --consumer Splunk \
-    --install-prereqs --yes
-```
+1. **Authenticate** — `POST /mgmt/shared/authn/login` (token refreshed after
+   BIG-IP-side restarts when the client retries).
+2. **Extensions** — `GET /mgmt/shared/appsvcs/info` and `/mgmt/shared/telemetry/info`.
+3. **Optional install** — with `--install-prereqs`: resolve GitHub release,
+   download RPM to `rpms/`, chunked upload, `package-management-tasks` INSTALL,
+   poll until `FINISHED`, wait for `/info`.
+4. **AS3** — `GET /mgmt/shared/appsvcs/declare`, inspect `Common.Shared` for
+   required classes.
+5. **TS** — `GET /mgmt/shared/telemetry/declare`, find `Telemetry_Consumer` types.
+6. **Report** — `[OK]` / `[WARN]` / `[MISSING]` and **READY** / **NOT READY**.
 
-## Workflow steps
-
-1. **Authenticate** — POST `/mgmt/shared/authn/login`. The returned token is
-   used for the rest of the session and re-issued after any TMOS-side restart
-   (extension install, module provisioning).
-2. **Probe extensions** — GET `/mgmt/shared/appsvcs/info` and
-   `/mgmt/shared/telemetry/info`.
-3. **(Optional) Install extensions** — when `--install-prereqs` is set and an
-   extension is missing:
-   - Resolve the GitHub release (`latest` unless pinned).
-   - Download the `.noarch.rpm` to `./rpms/` (cached; re-runs are fast).
-   - Confirm in chat (unless `--yes`) showing the host, RPM name and tag.
-   - Chunk-upload (`Content-Range` framing) to
-     `/mgmt/shared/file-transfer/uploads/<name>`. The upload lands at
-     `/var/config/rest/downloads/<name>` on the BIG-IP.
-   - POST to `/mgmt/shared/iapp/package-management-tasks` with
-     `{operation: "INSTALL", packageFilePath: ...}`.
-   - Poll the task ID until `FINISHED` (or fail on `FAILED`/`CANCELED`).
-   - Wait for the extension's `/info` endpoint to return.
-4. **Validate AS3 resources** — GET `/mgmt/shared/appsvcs/declare`, dig into
-   `Common.Shared`, and check each required class is present.
-5. **Validate TS consumer** — GET `/mgmt/shared/telemetry/declare` and walk
-   the document for `class: Telemetry_Consumer` with a `type` matching
-   `--consumer`.
-6. **Print report** — `[OK]`, `[WARN]`, `[MISSING]` lines and an overall
-   `READY` / `NOT READY` verdict.
-7. **(Optional) Remediate** — unless `--no-remediate`, when missing AS3
-   resources are present:
-   - Show the AS3 file and the host.
-   - Confirm in chat (unless `--yes`).
-   - POST the AS3 to `/mgmt/shared/appsvcs/declare`.
-   - Re-run the validation.
+**Optional remediate (CLI):** if AS3 objects are missing and not `--no-remediate`,
+prompts (unless `--yes`) then `POST /mgmt/shared/appsvcs/declare` with the chosen
+AS3 file, then re-validates.
 
 ## What is validated
 
-Depending on context, the tool checks only the AS3 objects that should exist for
-your **selected telemetry sources** (Web UI and API), or—when you use the CLI
-without a service scope—the full set matching the default `--as3-file` example
-(all LTM / ASM / AFM / DNS / analytics profiles below).
+Objects under `/Common/Shared` depend on selected sources (Web UI / API) or on
+the full example when using the default CLI `--as3-file`:
 
-Possible objects under `/Common/Shared` (subset required per selection):
+| Object | Class |
+|--------|--------|
+| `telemetry` | `Pool` |
+| `telemetry_hsl` | `Log_Destination` |
+| `telemetry_formatted` | `Log_Destination` |
+| `telemetry_publisher` | `Log_Publisher` |
+| `telemetry_traffic_log_profile` | `Traffic_Log_Profile` |
+| `telemetry_http_analytics_profile` | `Analytics_Profile` |
+| `telemetry_tcp_analytics_profile` | `Analytics_TCP_Profile` |
+| `telemetry_asm_security_log_profile` | `Security_Log_Profile` |
+| `telemetry_dns_logging` | `DNS_Logging_Profile` |
 
-| Object                                  | Class                  |
-|-----------------------------------------|------------------------|
-| `telemetry`                             | `Pool`                 |
-| `telemetry_hsl`                         | `Log_Destination`      |
-| `telemetry_formatted`                   | `Log_Destination`      |
-| `telemetry_publisher`                   | `Log_Publisher`        |
-| `telemetry_traffic_log_profile`         | `Traffic_Log_Profile`  |
-| `telemetry_http_analytics_profile`      | `Analytics_Profile`    |
-| `telemetry_tcp_analytics_profile`       | `Analytics_TCP_Profile`|
-| `telemetry_asm_security_log_profile`    | `Security_Log_Profile` |
-| `telemetry_dns_logging`                 | `DNS_Logging_Profile`  |
+**DNS logging:** requires GTM/DNS provisioned; attach the published profile per
+F5 docs — this tool only creates the Shared chain + `DNS_Logging_Profile`.
 
-When **DNS (GTM) logging** is selected in the Web UI or API, AS3 declares
-**`telemetry_dns_logging`** (`DNS_Logging_Profile`) with **`logPublisher`** pointing at
-the Shared **`telemetry_publisher`** (so the same HSL → Splunk-formatted →
-publisher chain as LTM/AFM). The **GTM / DNS services** module must be
-provisioned on the BIG-IP (TMOS **`gtm`** slot in **`/mgmt/tm/sys/provision`** on
-most images). Attach the published logging profile to **DNS profiles** or other
-objects per F5 documentation for your version; this tool only creates the Shared
-publisher chain and **`DNS_Logging_Profile`**.
-
-Optional objects (only needed for the TS "local listener" pattern, missing is a `[WARN]`):
-
-| Object                  | Class         |
-|-------------------------|---------------|
-| `telemetry_local_rule`  | `iRule`       |
-| `telemetry_local`       | `Service_TCP` |
+**Optional (local listener):** `telemetry_local_rule` (`iRule`), `telemetry_local`
+(`Service_TCP`) — missing is `[WARN]` unless required by your pattern.
 
 ## Exit codes
 
-| Code | Meaning                                    |
-|------|--------------------------------------------|
-| 0    | Device is READY for the named consumer     |
-| 1    | Device is NOT READY                        |
-| 2    | Configuration / connectivity / auth error  |
-| 3    | AS3 declaration apply failed               |
-| 4    | iControl LX extension install failed       |
+| Code | Meaning |
+|------|---------|
+| 0 | READY |
+| 1 | NOT READY |
+| 2 | Config / connectivity / auth error |
+| 3 | AS3 apply failed |
+| 4 | Extension install failed |
 
 ## Module compatibility
 
-The **Web UI** and remediation API build AS3 **only for the options you select**
-(for example, AFM logging objects are omitted if AFM is unchecked, so you do
-not need a separate “AFM-free” declaration file).
+The **Web UI** builds AS3 only for checked sources. The **default CLI** example
+file includes AVR/ASM/AFM/DNS-related objects together; AS3 **422** if a
+referenced module is not provisioned.
 
-If you still use the CLI with the default `examples/as3-telemetry-resources.json`,
-that static file includes **AVR**, **ASM**, **AFM**, and optional **`DNS_Logging_Profile`**
-objects together.
-AS3 returns HTTP **422** if a referenced module is not provisioned on the box.
+- Use **Provision required TMOS modules** in the UI, your own `--as3-file`, or
+  PATCH `/mgmt/tm/sys/provision/<module>` to `nominal`. Provisioning restarts
+  REST/TMM briefly.
+- **01071003 / busy:** remediation PATCHes modules **sequentially** with retries
+  while TMOS reports a prior provisioning job in flight.
 
-Mitigations:
-
-- **Web UI:** clear telemetry sources you are not licensed for, enable **Provision
-  required TMOS modules** when remediating, or provision modules yourself.
-- **CLI:** supply your own `--as3-file` that matches the modules on the device, or
-  provision missing modules (PATCH `/mgmt/tm/sys/provision/<m>` with
-  `{"level": "nominal"}`). Provisioning causes a short REST/TMM restart and may
-  exceed CPU/RAM on small vBIG-IPs.
-
-**Provisioning 400 / 01071003 (“previous provisioning operation is in progress”):**
-TMOS applies one module change at a time. Remediation **PATCHes each required
-module in sequence**, **waits** for that module to finish provisioning before the
-next, and each PATCH **retries** (with backoff) while the device reports a busy
-state. If you still see this after other admin activity, wait until the BIG-IP
-finishes its current provisioning cycle, then run **validate + remediate** again.
-
-**AVR and Telemetry Streaming (F5 guidance):** F5 documents pointing AVR at the
-TS Log Publisher in [Modifying AVR configuration to use the Log
-Publisher](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher)
-(**Exporting data from AVR**). That page lists prerequisites (AVR provisioned,
-TS **Event Listener** with an existing Log Publisher—see [Event Listener /
-logging sources](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/event-listener.html),
-analytics profiles on virtual servers) and the **tmsh** form:
+**AVR + TS:** F5 documents pointing AVR at your TS Log Publisher in
+[Modifying AVR configuration to use the Log Publisher](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher).
+Prerequisites include AVR provisioned, a TS Event Listener with a Log Publisher
+([Event Listener](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/event-listener.html)),
+and analytics profiles on virtual servers. Example **tmsh**:
 
 `modify analytics global-settings { external-logging-publisher /Common/telemetry_publisher offbox-protocol hsl use-offbox enabled }`
 
-(use your publisher’s full path if the name differs).
+With HTTP/TCP analytics selected, remediate **PATCHes**
+[`analytics global-settings`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_analytics_global-settings.html)
+(`useHsl`, `useOffbox`, publisher — default Shared publisher path matches this
+repo’s AS3; override with `avr_log_publisher_fullpath` on `/remediate`), then
+[`save sys config`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_sys_config.html),
+and applies additional TS/AVR workarounds documented for your environment.
 
-When you enable **HTTP Analytics** or **TCP Analytics** here and remediation runs
-**Apply AS3**, the Web UI path **PATCHes**
-[`/mgmt/tm/analytics/global-settings`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_analytics_global-settings.html)
-with **`externalLoggingPublisher`**, **`useHsl`**, and **`useOffbox`** (REST
-equivalent of that **tmsh** line). The default publisher is
-**`/Common/Shared/telemetry_publisher`**, matching this tool’s AS3 **Shared**
-Log Publisher. Set **`avr_log_publisher_fullpath`** on **`POST .../remediate`**
-for **`/Common/telemetry_publisher`** or any other path. It then **POSTs**
-[`/mgmt/tm/sys/config`](https://clouddocs.f5.com/api/icontrol-rest/APIRef_tm_sys_config.html)
-with **`{"command":"save"}`** (**`tmsh save sys config`**) so the configuration
-is written to disk.
-
-**ASM and AS3 422 (`localhost:8100`, `Connection refused`):** after provisioning
-ASM (or other restarts), AS3 may still return **422** while it queries
-`/mgmt/tm/asm/policies` through an on-box listener (often **localhost:8100**)
-that is not accepting connections yet. That is a **warm-up race**, not a bad
-declaration. The Web UI remediation path waits on **`GET /mgmt/tm/asm/policies`**
-when **ASM** is selected, then **retries** the AS3 POST on transient 422
-responses. If it still fails, wait one to two minutes and run **validate +
-remediate** again without re-installing RPMs.
+**ASM + AS3 422 (`localhost:8100`):** after ASM provisioning, AS3 may 422 while
+ASM REST warms up. The UI waits on `GET /mgmt/tm/asm/policies` when ASM is
+selected and retries AS3; if needed wait 1–2 minutes and remediate again.
 
 ## Limitations and known gaps
 
-- **TS declaration creation (CLI).** The CLI still reports whether a
-  `Telemetry_Consumer` of the expected type exists, but does not POST a new
-  declaration. Use the **Web UI** (or call `BigIPClient.post_ts_declaration`
-  yourself) to push a composed consumer declaration to
-  `/mgmt/shared/telemetry/declare`.
-- **TLS verification off by default.** Lab boxes typically have self-signed
-  certs; `--verify-tls` opts in to certificate validation.
-- **`--install-prereqs` requires internet access** from the workstation
-  running the script (to `api.github.com` and the GitHub release CDN).
-  Air-gapped environments need a pre-downloaded RPM cache pointed at via
-  `--rpm-cache-dir`.
-- **Single-device.** No batch or fleet-wide operation. Loop the script over
-  a list of hosts if you need that.
-- **No rollback.** AS3 is declarative so re-applying an old declaration
-  reverts changes, but the script does not snapshot or restore state on
-  failure.
-- **BIG-IQ / Statistics Collection.** F5 notes that if the device is managed by
-  BIG-IQ with Statistics Collection enabled, AVR configuration may be
-  overwritten to publish only to BIG-IQ, which can conflict with TS-oriented AVR
-  setup. See [Exporting data from AVR](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html).
+- **CLI does not POST TS declarations** — use the Web UI or call
+  `BigIPClient.post_ts_declaration` / `build_ts_declaration` yourself.
+- **Rollback is Web/API only** — not exposed on the CLI; it removes this tool’s
+  TS + AS3 footprint and several remediate-time TMOS settings, not RPMs or
+  module provisioning levels.
+- **TLS verification** is off by default (`--verify-tls` to enable).
+- **Single device** per run; no built-in fleet mode.
+- **BIG-IQ / Statistics Collection** can overwrite AVR toward BIG-IQ only; see
+  [AVR export](https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html).
 
 ## Roadmap
 
-### Near term
-
-- `--ts-declaration <file>`: POST a TS declaration from the CLI (the Web UI
-  already performs an equivalent POST for common consumers).
-- `--provision <module>:<level>`: provision an arbitrary module from the CLI
-  (currently done out-of-band; the AVR provisioning flow was inlined for
-  the lab session).
-- Make the `Analytics_Profile` / `Analytics_TCP_Profile` checks
-  module-conditional: `[WARN]` instead of `[MISSING]` when AVR isn't
+- CLI: `POST` TS from `--ts-declaration <file>`; optional `--provision <module>:<level>`.
+- Validation: treat missing analytics profiles as `[WARN]` when AVR is not
   provisioned.
-- Optional structured logging (`--log-format json`) to feed CI pipelines.
-
-### Frontend UI
-
-Delivered as `server/app.py` + `frontend/` (see **Web UI** above). Remaining
-nice-to-haves: library split for cleaner imports, SSE for long RPM installs,
-and a packaged `Dockerfile`.
-
-### Stretch
-
-- Fleet view (validate N BIG-IPs in parallel, group by readiness state).
-- Optional integration with F5 BIG-IQ for credentials and inventory.
-- Compatibility matrix view: show which telemetry source and module combination
-  will work for a given device, based on what is provisioned.
+- Optional `--log-format json` for CI.
+- Packaging: `Dockerfile`, SSE or progress for long RPM installs.
 
 ## Contributing
 
-Conventional Git workflow. The Python is targeted at 3.10+, uses standard
-library + `requests`, and stays under 400 lines for readability. Don't add
-abstractions without a second use case in sight.
+Conventional Git workflow. Prefer small, focused changes; match existing style
+(`requests`, minimal dependencies).
 
 ## License
 
