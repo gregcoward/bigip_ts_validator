@@ -25,11 +25,13 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     ) {
       const port =
         typeof window !== "undefined" && window.location.port ? window.location.port : "";
+      const longOpHint =
+        " Remediation can take many minutes (RPMs, provisioning, AS3, TS). If work actually finished on the BIG-IP but you see this here, the connection was often closed early by a **timeout** (reverse proxy, load balancer, or corporate filter) — not because the API was down. Increase proxy read timeouts (e.g. nginx `proxy_read_timeout 900s;` for `/api`) or run the UI directly on the API port.";
       const viteHint =
         port === "5173"
-          ? " This UI is on the Vite dev port: the /api proxy targets http://127.0.0.1:8000 — start the FastAPI server there (for example: python run_server.py from the repo root)."
-          : " Start the FastAPI server (for example: python run_server.py) so this origin can reach the API, then reload.";
-      throw new Error(`Cannot reach the API at ${url}.${viteHint} (${message})`);
+          ? " Vite dev proxies `/api` to http://127.0.0.1:8000 — ensure that process is running; `vite.config.ts` sets a long proxy timeout for `/api`."
+          : " Ensure the FastAPI process is listening on this host/port (e.g. `python run_server.py` binding `0.0.0.0:8000`).";
+      throw new Error(`Network error calling ${url}.${viteHint}${longOpHint} (${message})`);
     }
     throw err instanceof Error ? err : new Error(message);
   }
