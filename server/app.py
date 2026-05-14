@@ -91,6 +91,15 @@ class RemediateBody(BaseModel):
     provision_modules: bool = False
     provision_level: str = Field(default="nominal", description="TMOS provision level (usually nominal)")
     assume_yes: bool = True
+    avr_log_publisher_fullpath: str | None = Field(
+        default=None,
+        description=(
+            "Log_Publisher full path for AVR (F5 TS example: /Common/telemetry_publisher). "
+            "During AS3 remediation the per-item analytics PATCH defaults to /Common/Shared/telemetry_publisher; "
+            "the end-of-remediation TS+AVR collection PATCH uses this field or /Common/telemetry_publisher if unset. "
+            "See https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher"
+        ),
+    )
 
 
 app = FastAPI(title="BIG-IP Telemetry Streaming helper", version="1.0.0")
@@ -192,6 +201,24 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             steps.append({"step": "post_as3", "response": as3_resp})
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if svc.get("http_analytics") or svc.get("tcp_analytics"):
+            try:
+                pub = body.avr_log_publisher_fullpath or "/Common/Shared/telemetry_publisher"
+                avr_gs = s.client.configure_analytics_global_settings_for_avr(log_publisher_fullpath=pub)
+                steps.append(
+                    {
+                        "step": "analytics_global_settings_avr",
+                        "log_publisher": pub,
+                        "response": avr_gs,
+                    }
+                )
+                try:
+                    save_resp = s.client.save_sys_config()
+                    steps.append({"step": "save_sys_config", "response": save_resp})
+                except BigIPError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except BigIPError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if body.post_ts:
         try:
@@ -203,6 +230,34 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             )
             ts_resp = s.client.post_ts_declaration(ts_decl)
             steps.append({"step": "post_ts", "response": ts_resp})
+        except BigIPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    try:
+        loopback_db = s.client.put_sys_db_allow_loopback_tcl_rule_node()
+        steps.append(
+            {
+                "step": "sys_db_allow_loopback_tcl_rule_node",
+                "path": "/mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses",
+                "response": loopback_db,
+            }
+        )
+    except BigIPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if svc.get("http_analytics") or svc.get("tcp_analytics"):
+        try:
+            avr_pub = body.avr_log_publisher_fullpath or "/Common/telemetry_publisher"
+            avr_coll = s.client.patch_analytics_global_settings_collection_ts_avr(
+                external_logging_publisher=avr_pub
+            )
+            steps.append(
+                {
+                    "step": "analytics_global_settings_collection_ts_avr",
+                    "externalLoggingPublisher": avr_pub,
+                    "response": avr_coll,
+                }
+            )
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

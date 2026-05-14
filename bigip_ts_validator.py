@@ -154,6 +154,9 @@ class BigIPClient:
     def _patch(self, path: str, body: Any) -> requests.Response:
         return self.session.patch(f"{self.base_url}{path}", json=body, timeout=self.timeout)
 
+    def _put(self, path: str, body: Any) -> requests.Response:
+        return self.session.put(f"{self.base_url}{path}", json=body, timeout=self.timeout)
+
     def provision_query(self) -> dict[str, str]:
         """Return TMOS module slug (lowercase) -> provision level (lowercase)."""
         resp = self._get("/mgmt/tm/sys/provision")
@@ -206,6 +209,119 @@ class BigIPClient:
             f"Provisioning PATCH for {mod} timed out after {busy_timeout}s waiting for prior "
             f"provisioning to finish (last response): {last_body[:800]}"
         )
+
+    def configure_analytics_global_settings_for_avr(
+        self,
+        *,
+        log_publisher_fullpath: str = "/Common/Shared/telemetry_publisher",
+    ) -> dict[str, Any]:
+        """Enable AVR off-box analytics logging over HSL to the Shared ``telemetry_publisher``.
+
+        REST equivalent of::
+
+            modify analytics global-settings {
+                external-logging-publisher <publisher>
+                offbox-protocol hsl
+                use-offbox enabled
+            }
+
+        See ``/mgmt/tm/analytics/global-settings`` (``useHsl``, ``useOffbox``,
+        ``externalLoggingPublisher``). The default publisher path matches AS3
+        objects created under ``/Common/Shared/`` by this tool.
+
+        F5 TS documents the same **tmsh** intent (publisher name may differ) at:
+        https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher
+        """
+        r = self._get("/mgmt/tm/analytics/global-settings")
+        if r.status_code != 200:
+            raise BigIPError(
+                f"Cannot read /mgmt/tm/analytics/global-settings ({r.status_code}): {r.text[:800]}"
+            )
+        data = r.json() or {}
+        items = data.get("items")
+        if not isinstance(items, list) or not items:
+            raise BigIPError(
+                "GET /mgmt/tm/analytics/global-settings returned no items; "
+                "cannot configure AVR off-box logging."
+            )
+        item = items[0]
+        part = str(item.get("partition") or "Common")
+        nm = str(item.get("name") or "global-settings")
+        path = f"/mgmt/tm/analytics/global-settings/~{part}~{nm}"
+        body = {
+            "externalLoggingPublisher": log_publisher_fullpath,
+            "useHsl": "enabled",
+            "useOffbox": "enabled",
+        }
+        pr = self._patch(path, body)
+        if pr.status_code not in (200, 202):
+            raise BigIPError(
+                f"PATCH analytics global-settings failed ({pr.status_code}): {pr.text[:1200]}"
+            )
+        try:
+            return pr.json() if pr.text.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def save_sys_config(self) -> dict[str, Any]:
+        """REST equivalent of ``tmsh save sys config`` (persist running config to disk).
+
+        POST ``/mgmt/tm/sys/config`` with ``command: save``. See F5 iControl REST
+        ``sys/config`` task reference.
+        """
+        r = self._post("/mgmt/tm/sys/config", {"command": "save"})
+        if r.status_code not in (200, 202):
+            raise BigIPError(
+                f"save sys config failed ({r.status_code}): {r.text[:1200]}"
+            )
+        try:
+            return r.json() if r.text.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def patch_analytics_global_settings_collection_ts_avr(
+        self,
+        *,
+        external_logging_publisher: str = "/Common/telemetry_publisher",
+    ) -> dict[str, Any]:
+        """Telemetry Streaming + AVR workaround: PATCH analytics global-settings collection.
+
+        Some TS deployments require a final **PATCH** to ``/mgmt/tm/analytics/global-settings``
+        (collection URI) with ``offboxProtocol`` / ``useOffbox`` / ``externalLoggingPublisher``,
+        distinct from per-item PATCHes used elsewhere.
+        """
+        path = "/mgmt/tm/analytics/global-settings"
+        body = {
+            "externalLoggingPublisher": external_logging_publisher,
+            "offboxProtocol": "hsl",
+            "useOffbox": "enabled",
+        }
+        r = self._patch(path, body)
+        if r.status_code not in (200, 202):
+            raise BigIPError(
+                f"PATCH {path} (TS+AVR workaround) failed ({r.status_code}): {r.text[:1200]}"
+            )
+        try:
+            return r.json() if r.text.strip() else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def put_sys_db_allow_loopback_tcl_rule_node(self) -> dict[str, Any]:
+        """Telemetry Streaming workaround: allow Tcl/iRule nodes to use loopback addresses.
+
+        ``PUT /mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses`` with
+        ``{"value": "true"}`` (equivalent to the documented **curl** workaround).
+        """
+        path = "/mgmt/tm/sys/db/tmm.tcl.rule.node.allow_loopback_addresses"
+        r = self._put(path, {"value": "true"})
+        if r.status_code not in (200, 202):
+            raise BigIPError(
+                f"PUT {path} failed ({r.status_code}): {r.text[:1200]}"
+            )
+        try:
+            return r.json() if r.text.strip() else {}
+        except json.JSONDecodeError:
+            return {}
 
     def wait_asm_policy_api_ready(self, timeout: int = 300, interval: float = 5.0) -> None:
         """Wait until ASM policy REST is usable on the management API.
