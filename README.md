@@ -311,13 +311,6 @@ After `git pull` or changing Python dependencies, run **`pip install -r
 requirements.txt`** (and **`npm run build`** if the frontend changed), then
 **`systemctl restart`**.
 
-### 5. Optional: reverse proxy
-
-For TLS termination, path prefixes, or exposing on ports 80/443, put **nginx**,
-**Caddy**, or another reverse proxy in front of Uvicorn and proxy to
-`http://127.0.0.1:8000`. Keep the API bound to loopback unless the proxy and
-network path are trusted.
-
 ## Inputs
 
 | Input            | Where it goes                | Notes                                                                 |
