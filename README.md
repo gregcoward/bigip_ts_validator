@@ -1,4 +1,5 @@
-# bigip-ts-validator
+# BIG-IP-Telemetry-Streaming-Validator-and-Configurator
+Public
 
 Validate (and optionally remediate) a F5 BIG-IP for F5 Telemetry Streaming (TS)
 readiness against a named third-party consumer (Splunk, Azure Log Analytics,
