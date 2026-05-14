@@ -91,14 +91,6 @@ class RemediateBody(BaseModel):
     provision_modules: bool = False
     provision_level: str = Field(default="nominal", description="TMOS provision level (usually nominal)")
     assume_yes: bool = True
-    avr_log_publisher_fullpath: str | None = Field(
-        default=None,
-        description=(
-            "Log_Publisher full path for AVR global-settings (F5 TS example: /Common/telemetry_publisher; "
-            "default here: /Common/Shared/telemetry_publisher). See "
-            "https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher"
-        ),
-    )
 
 
 app = FastAPI(title="BIG-IP Telemetry Streaming helper", version="1.0.0")
@@ -200,24 +192,6 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
             steps.append({"step": "post_as3", "response": as3_resp})
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        if svc.get("http_analytics") or svc.get("tcp_analytics"):
-            try:
-                pub = body.avr_log_publisher_fullpath or "/Common/Shared/telemetry_publisher"
-                avr_gs = s.client.configure_analytics_global_settings_for_avr(log_publisher_fullpath=pub)
-                steps.append(
-                    {
-                        "step": "analytics_global_settings_avr",
-                        "log_publisher": pub,
-                        "response": avr_gs,
-                    }
-                )
-                try:
-                    save_resp = s.client.save_sys_config()
-                    steps.append({"step": "save_sys_config", "response": save_resp})
-                except BigIPError as exc:
-                    raise HTTPException(status_code=502, detail=str(exc)) from exc
-            except BigIPError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if body.post_ts:
         try:
