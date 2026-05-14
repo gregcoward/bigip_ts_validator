@@ -726,32 +726,6 @@ export default function App() {
         </button>
       </div>
 
-      <div className="card">
-        <h2>Rollback (destructive)</h2>
-        <p className="muted">
-          Removes Telemetry Streaming configuration (POST body <code>{'{"class": "Telemetry"}'}</code> per F5 docs),{" "}
-          <strong>deletes</strong> the AS3 <code>Common/Shared</code> application this tool manages (pool, log
-          publisher, profiles, local listener virtual, etc.), sets{" "}
-          <code>tmm.tcl.rule.node.allow_loopback_addresses</code> back to <code>false</code>, disables AVR off-box / HSL
-          on analytics global-settings, then runs <code>save sys config</code>. Installed RPMs and TMOS module
-          provisioning levels are <strong>not</strong> changed.
-        </p>
-        <label className="check">
-          <input type="checkbox" checked={rollbackAck} onChange={(e) => setRollbackAck(e.target.checked)} />
-          I understand this will remove the above configuration from the connected BIG-IP.
-        </label>
-        <div className="actions" style={{ marginTop: "0.75rem" }}>
-          <button
-            type="button"
-            className="btn btn-danger"
-            disabled={!sessionId || busy || !rollbackAck}
-            onClick={() => void runRollback()}
-          >
-            Rollback
-          </button>
-        </div>
-      </div>
-
       {findings && (
         <div className="card report">
           <h2>Last report</h2>
@@ -816,6 +790,32 @@ export default function App() {
           <pre className="report-pre">{JSON.stringify(rollbackResult.steps, null, 2)}</pre>
         </div>
       )}
+
+      <div className="card">
+        <h2>Rollback (destructive)</h2>
+        <p className="muted">
+          Removes Telemetry Streaming configuration (POST body <code>{'{"class": "Telemetry"}'}</code> per F5 docs),{" "}
+          <strong>deletes</strong> the AS3 <code>Common/Shared</code> application this tool manages (pool, log
+          publisher, profiles, local listener virtual, etc.), sets{" "}
+          <code>tmm.tcl.rule.node.allow_loopback_addresses</code> back to <code>false</code>, disables AVR off-box / HSL
+          on analytics global-settings, then runs <code>save sys config</code>. Installed RPMs and TMOS module
+          provisioning levels are <strong>not</strong> changed.
+        </p>
+        <label className="check">
+          <input type="checkbox" checked={rollbackAck} onChange={(e) => setRollbackAck(e.target.checked)} />
+          I understand this will remove the above configuration from the connected BIG-IP.
+        </label>
+        <div className="actions" style={{ marginTop: "0.75rem" }}>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={!sessionId || busy || !rollbackAck}
+            onClick={() => void runRollback()}
+          >
+            Rollback
+          </button>
+        </div>
+      </div>
     </div>
     </>
   );
