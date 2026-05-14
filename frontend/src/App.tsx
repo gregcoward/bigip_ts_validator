@@ -36,7 +36,75 @@ const defaultServices: Services = {
   dns: false,
 };
 
-function buildConsumerPayload(raw: Record<string, string>): Record<string, unknown> {
+const SUMO_HTTP_COLLECTOR_PREFIX = "/receiver/v1/http/";
+
+/** Parse a Sumo Logic HTTP collector URL into TS consumer fields (host, protocol, port, path, secret). */
+function parseSumoLogicEndpoint(input: string): {
+  host: string;
+  protocol: string;
+  port: number;
+  path: string;
+  secret: string;
+} {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("Sumo Logic collector URL is required");
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    try {
+      url = new URL(`https://${trimmed}`);
+    } catch {
+      throw new Error("Invalid Sumo Logic collector URL");
+    }
+  }
+  const protocol = url.protocol.replace(/:$/, "").toLowerCase();
+  if (protocol !== "http" && protocol !== "https") {
+    throw new Error("Sumo Logic URL must use http or https");
+  }
+  const host = url.hostname;
+  if (!host) {
+    throw new Error("Missing host in Sumo Logic URL");
+  }
+  const port = url.port
+    ? parseInt(url.port, 10)
+    : protocol === "https"
+      ? 443
+      : 80;
+  if (Number.isNaN(port)) {
+    throw new Error("Invalid port in Sumo Logic URL");
+  }
+  const pathname = url.pathname || "/";
+  const low = pathname.toLowerCase();
+  const idx = low.indexOf(SUMO_HTTP_COLLECTOR_PREFIX.toLowerCase());
+  let path: string;
+  let secret: string;
+  if (idx >= 0) {
+    path = pathname.slice(0, idx + SUMO_HTTP_COLLECTOR_PREFIX.length);
+    secret = pathname.slice(idx + SUMO_HTTP_COLLECTOR_PREFIX.length);
+  } else {
+    const last = pathname.lastIndexOf("/");
+    if (last <= 0) {
+      throw new Error(
+        "Could not parse Sumo URL: expected path containing /receiver/v1/http/ followed by the collector token",
+      );
+    }
+    path = pathname.slice(0, last + 1);
+    secret = pathname.slice(last + 1);
+  }
+  secret = decodeURIComponent(secret.replace(/^\/+/, ""));
+  if (!secret) {
+    throw new Error("Missing collector token in the Sumo Logic URL (after the HTTP path)");
+  }
+  if (!path.endsWith("/")) {
+    path += "/";
+  }
+  return { host, protocol, port, path, secret };
+}
+
+function buildConsumerPayload(raw: Record<string, string>, consumer: string): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
     if (v.trim() !== "") o[k] = v.trim();
@@ -48,6 +116,18 @@ function buildConsumerPayload(raw: Record<string, string>): Record<string, unkno
       o.consumerJson = JSON.parse(text) as object;
     } catch {
       throw new Error("Consumer JSON must be valid JSON");
+    }
+  }
+  if (consumer === "Sumo_Logic") {
+    const endpoint = String(o.sumoEndpoint ?? "").trim();
+    delete o.sumoEndpoint;
+    if (endpoint) {
+      const parsed = parseSumoLogicEndpoint(endpoint);
+      o.host = parsed.host;
+      o.protocol = parsed.protocol;
+      o.port = parsed.port;
+      o.path = parsed.path;
+      o.secret = parsed.secret;
     }
   }
   return o;
@@ -149,13 +229,22 @@ function ConsumerFields({
   }
   if (consumer === "Sumo_Logic") {
     return (
-      <>
-        {field("host", "Sumo HTTP host")}
-        {field("protocol", "Protocol", "text", "https")}
-        {field("port", "Port", "number", "443")}
-        {field("path", "HTTP path", "text", "/receiver/v1/http/")}
-        {field("secret", "Path secret / collector key", "password")}
-      </>
+      <div className="field" key="sumoEndpoint">
+        <label htmlFor="sumoEndpoint">Sumo Logic collector URL (full URL)</label>
+        <textarea
+          id="sumoEndpoint"
+          autoComplete="off"
+          rows={3}
+          spellCheck={false}
+          placeholder="https://&lt;deployment&gt;.sumologic.com/receiver/v1/http/&lt;token&gt;"
+          value={values.sumoEndpoint ?? ""}
+          onChange={(e) => onChange("sumoEndpoint", e.target.value)}
+        />
+        <p className="muted">
+          Paste the full HTTP(S) collector URL. Host, protocol, port, path, and path secret are derived
+          automatically (default port 443 for https, 80 for http when omitted).
+        </p>
+      </div>
     );
   }
   if (consumer === "ElasticSearch") {
@@ -354,7 +443,7 @@ export default function App() {
     setError(null);
     setBusy(true);
     try {
-      const consumer_params = buildConsumerPayload(params);
+      const consumer_params = buildConsumerPayload(params, consumer);
       const r = await fetch(api(`/api/session/${sessionId}/remediate`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -533,7 +622,17 @@ export default function App() {
         <div className="row">
           <div className="field" style={{ flex: "2 1 320px" }}>
             <label htmlFor="cons">Consumer type</label>
-            <select id="cons" value={consumer} onChange={(e) => setConsumer(e.target.value)}>
+            <select
+              id="cons"
+              value={consumer}
+              onChange={(e) => {
+                const v = e.target.value;
+                setConsumer(v);
+                if (v === "Sumo_Logic") {
+                  setParams({ sumoEndpoint: "" });
+                }
+              }}
+            >
               <option value="Splunk">Splunk (HEC)</option>
               <option value="Azure_Log_Analytics">Azure Log Analytics</option>
               <option value="Azure_Application_Insights">Azure Application Insights</option>

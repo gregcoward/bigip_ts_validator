@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 # TS consumer ``type`` values must match F5 docs. CLI historically used ``Datadog``;
 # BIG-IP expects ``DataDog``.
@@ -21,6 +23,55 @@ def normalize_consumer_type(name: str) -> str:
 
 def _passphrase(secret: str) -> dict[str, Any]:
     return {"cipherText": secret}
+
+
+_SUMO_HTTP_PATH_MARKER = "/receiver/v1/http/"
+
+
+def _parse_sumo_logic_endpoint(url: str) -> dict[str, Any]:
+    """Split a Sumo HTTP collector URL into host, protocol, port, path, secret."""
+    raw = (url or "").strip()
+    if not raw:
+        raise ValueError("Sumo Logic collector URL is empty")
+    if not re.match(r"^[a-zA-Z][-a-zA-Z0-9+.]*://", raw):
+        raw = "https://" + raw
+    p = urlparse(raw)
+    scheme = (p.scheme or "https").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError("Sumo Logic URL must use http or https")
+    host = p.hostname
+    if not host:
+        raise ValueError("Missing host in Sumo Logic URL")
+    port = p.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    path = p.path or "/"
+    low = path.lower()
+    idx = low.find(_SUMO_HTTP_PATH_MARKER)
+    if idx >= 0:
+        base_path = path[: idx + len(_SUMO_HTTP_PATH_MARKER)]
+        secret = path[idx + len(_SUMO_HTTP_PATH_MARKER) :]
+    else:
+        last = path.rfind("/")
+        if last <= 0:
+            raise ValueError(
+                "Could not parse Sumo URL: expected path containing /receiver/v1/http/ followed by the token"
+            )
+        base_path = path[: last + 1]
+        secret = path[last + 1 :]
+    secret = unquote(secret.lstrip("/"))
+    if not secret:
+        raise ValueError("Missing collector token in Sumo Logic URL")
+    if not base_path.endswith("/"):
+        base_path += "/"
+    return {"host": host, "protocol": scheme, "port": port, "path": base_path, "secret": secret}
+
+
+def _sumo_logic_resolved_params(consumer_params: dict[str, Any]) -> dict[str, Any]:
+    raw = consumer_params.get("sumoEndpoint") or consumer_params.get("sumo_endpoint")
+    if isinstance(raw, str) and raw.strip():
+        return _parse_sumo_logic_endpoint(raw)
+    return consumer_params
 
 
 def build_ts_declaration(
@@ -132,11 +183,12 @@ def build_ts_declaration(
             consumer["headers"] = [{"name": "content-type", "value": "application/json"}]
 
     elif ctype == "Sumo_Logic":
-        consumer["host"] = consumer_params["host"]
-        consumer["protocol"] = consumer_params.get("protocol", "https")
-        consumer["port"] = int(consumer_params.get("port", 443))
-        consumer["path"] = consumer_params.get("path", "/receiver/v1/http/")
-        consumer["passphrase"] = _passphrase(consumer_params["secret"])
+        sp = _sumo_logic_resolved_params(consumer_params)
+        consumer["host"] = sp["host"]
+        consumer["protocol"] = sp.get("protocol", "https")
+        consumer["port"] = int(sp.get("port", 443))
+        consumer["path"] = sp.get("path", "/receiver/v1/http/")
+        consumer["passphrase"] = _passphrase(sp["secret"])
 
     elif ctype == "ElasticSearch":
         consumer["host"] = consumer_params["host"]
