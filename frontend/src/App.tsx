@@ -4,6 +4,23 @@ import f5LogoUrl from "./assets/F5-logo-F5-rgb.svg";
 
 const api = (path: string) => path;
 
+/** Parse JSON from fetch; avoids ``r.json()`` throwing when the server returns HTML or plain text. */
+async function readJsonResponse<T>(r: Response): Promise<T> {
+  const text = await r.text();
+  if (!text.trim()) {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`.trim());
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const snip = text.replace(/\s+/g, " ").trim().slice(0, 280);
+    throw new Error(
+      `Expected JSON from API (${r.status} ${r.statusText}). Body starts with: ${snip}${text.length > 280 ? "…" : ""}`,
+    );
+  }
+}
+
 const THEME_STORAGE_KEY = "bigip-ts-ui-theme";
 
 type ThemeMode = "light" | "dark" | "system";
@@ -410,7 +427,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ host, username, password, verify_tls: verifyTls }),
       });
-      const data = (await r.json()) as { detail?: string; session_id?: string };
+      const data = await readJsonResponse<{ detail?: string; session_id?: string }>(r);
       if (!r.ok) throw new Error(data.detail ?? r.statusText);
       setSessionId(data.session_id!);
       setFindings(null);
@@ -435,7 +452,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ consumer, services: servicesPayload, include_system_poller: includeSystemPoller }),
       });
-      const data = (await r.json()) as Findings & { detail?: string };
+      const data = await readJsonResponse<Findings & { detail?: string }>(r);
       if (!r.ok) throw new Error((data as { detail?: string }).detail ?? r.statusText);
       setFindings(data);
     } catch (e) {
@@ -467,11 +484,11 @@ export default function App() {
           assume_yes: true,
         }),
       });
-      const data = (await r.json()) as {
+      const data = await readJsonResponse<{
         detail?: string;
         steps?: unknown[];
         findings?: Findings;
-      };
+      }>(r);
       if (!r.ok) throw new Error(data.detail ?? r.statusText);
       setRemediation({ steps: data.steps ?? [], findings: data.findings! });
       setFindings(data.findings!);
@@ -504,7 +521,7 @@ export default function App() {
           save_sys_config_after: true,
         }),
       });
-      const data = (await r.json()) as { detail?: string; steps?: unknown[] };
+      const data = await readJsonResponse<{ detail?: string; steps?: unknown[] }>(r);
       if (!r.ok) throw new Error(data.detail ?? r.statusText);
       setRollbackResult({ steps: data.steps ?? [] });
       setRemediation(null);

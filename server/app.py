@@ -53,6 +53,19 @@ def _get_session(session_id: str) -> _Session:
     return s
 
 
+def _json_safe_for_response(value: Any) -> Any:
+    """Recursively coerce values so ``json.dumps`` / FastAPI response encoding cannot fail on odd BIG-IP payloads."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe_for_response(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_for_response(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 class ConnectBody(BaseModel):
     host: str = Field(..., description="BIG-IP management IP or hostname")
     username: str
@@ -166,6 +179,15 @@ def session_validate(session_id: str, body: ValidateBody) -> dict[str, Any]:
 
 @app.post("/api/session/{session_id}/remediate")
 def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
+    try:
+        return _session_remediate_impl(session_id, body)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Remediate failed: {exc}") from exc
+
+
+def _session_remediate_impl(session_id: str, body: RemediateBody) -> dict[str, Any]:
     s = _get_session(session_id)
     svc = body.services.model_dump()
     if not any(svc.values()):
@@ -296,11 +318,20 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
         include_local_listener=True,
     )
     findings["consumer_normalized"] = normalize_consumer_type(body.consumer)
-    return {"steps": steps, "findings": findings}
+    return {"steps": _json_safe_for_response(steps), "findings": findings}
 
 
 @app.post("/api/session/{session_id}/rollback")
 def session_rollback(session_id: str, body: RollbackBody) -> dict[str, Any]:
+    try:
+        return _session_rollback_impl(session_id, body)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Rollback failed: {exc}") from exc
+
+
+def _session_rollback_impl(session_id: str, body: RollbackBody) -> dict[str, Any]:
     """Remove TS config, AS3 Shared telemetry app, and remediate-time TMOS tweaks (best-effort)."""
     if not body.confirm:
         raise HTTPException(
@@ -351,7 +382,7 @@ def session_rollback(session_id: str, body: RollbackBody) -> dict[str, Any]:
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return {"steps": steps}
+    return {"steps": _json_safe_for_response(steps)}
 
 
 @app.get("/api/consumers")
