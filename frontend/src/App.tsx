@@ -4,6 +4,37 @@ import f5LogoUrl from "./assets/F5-logo-F5-rgb.svg";
 
 const api = (path: string) => path;
 
+/**
+ * Same-origin ``fetch`` for API paths, with clearer errors when the browser reports a network failure
+ * (otherwise you only see "Failed to fetch").
+ */
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const url = api(path);
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const name = err instanceof Error ? err.name : "";
+    if (
+      name === "TypeError" &&
+      (message === "Failed to fetch" ||
+        message.includes("Failed to load") ||
+        message.includes("Load failed") ||
+        message.includes("NetworkError") ||
+        message.includes("network"))
+    ) {
+      const port =
+        typeof window !== "undefined" && window.location.port ? window.location.port : "";
+      const viteHint =
+        port === "5173"
+          ? " This UI is on the Vite dev port: the /api proxy targets http://127.0.0.1:8000 — start the FastAPI server there (for example: python run_server.py from the repo root)."
+          : " Start the FastAPI server (for example: python run_server.py) so this origin can reach the API, then reload.";
+      throw new Error(`Cannot reach the API at ${url}.${viteHint} (${message})`);
+    }
+    throw err instanceof Error ? err : new Error(message);
+  }
+}
+
 /** Parse JSON from fetch; avoids ``r.json()`` throwing when the server returns HTML or plain text. */
 async function readJsonResponse<T>(r: Response): Promise<T> {
   const text = await r.text();
@@ -422,7 +453,7 @@ export default function App() {
     setError(null);
     setBusy(true);
     try {
-      const r = await fetch(api("/api/session"), {
+      const r = await apiFetch("/api/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ host, username, password, verify_tls: verifyTls }),
@@ -447,7 +478,7 @@ export default function App() {
     setError(null);
     setBusy(true);
     try {
-      const r = await fetch(api(`/api/session/${sessionId}/validate`), {
+      const r = await apiFetch(`/api/session/${sessionId}/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ consumer, services: servicesPayload, include_system_poller: includeSystemPoller }),
@@ -468,7 +499,7 @@ export default function App() {
     setBusy(true);
     try {
       const consumer_params = buildConsumerPayload(params, consumer);
-      const r = await fetch(api(`/api/session/${sessionId}/remediate`), {
+      const r = await apiFetch(`/api/session/${sessionId}/remediate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -509,7 +540,7 @@ export default function App() {
     setError(null);
     setBusy(true);
     try {
-      const r = await fetch(api(`/api/session/${sessionId}/rollback`), {
+      const r = await apiFetch(`/api/session/${sessionId}/rollback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
