@@ -116,6 +116,11 @@ def _extension_info_with_settle(
     return last
 
 
+AVR_GLOBAL_SETTINGS_ITEM_DEFAULT = (
+    "/mgmt/tm/analytics/global-settings/~Common~global-settings"
+)
+
+
 class BigIPClient:
     def __init__(self, host: str, username: str, password: str, verify_tls: bool = False, timeout: int = 30):
         self.base_url = f"https://{host}"
@@ -214,6 +219,8 @@ class BigIPClient:
         self,
         *,
         log_publisher_fullpath: str = "/Common/Shared/telemetry_publisher",
+        wait_for_items_timeout: float = 120.0,
+        wait_interval: float = 5.0,
     ) -> dict[str, Any]:
         """Enable AVR off-box analytics logging over HSL to the Shared ``telemetry_publisher``.
 
@@ -225,6 +232,12 @@ class BigIPClient:
                 use-offbox enabled
             }
 
+        Some platforms return an empty ``items`` array on
+        ``GET /mgmt/tm/analytics/global-settings`` until AVR is fully ready after
+        provisioning, or only expose the singleton via a fixed URI. This method
+        **polls** the collection, then falls back to **PATCH** ``~Common~global-settings``
+        and finally a **PATCH** on the collection with the same body.
+
         See ``/mgmt/tm/analytics/global-settings`` (``useHsl``, ``useOffbox``,
         ``externalLoggingPublisher``). The default publisher path matches AS3
         objects created under ``/Common/Shared/`` by this tool.
@@ -232,36 +245,66 @@ class BigIPClient:
         F5 TS documents the same **tmsh** intent (publisher name may differ) at:
         https://clouddocs.f5.com/products/extensions/f5-telemetry-streaming/latest/avr.html#modifying-avr-configuration-to-use-the-log-publisher
         """
-        r = self._get("/mgmt/tm/analytics/global-settings")
-        if r.status_code != 200:
-            raise BigIPError(
-                f"Cannot read /mgmt/tm/analytics/global-settings ({r.status_code}): {r.text[:800]}"
-            )
-        data = r.json() or {}
-        items = data.get("items")
-        if not isinstance(items, list) or not items:
-            raise BigIPError(
-                "GET /mgmt/tm/analytics/global-settings returned no items; "
-                "cannot configure AVR off-box logging."
-            )
-        item = items[0]
-        part = str(item.get("partition") or "Common")
-        nm = str(item.get("name") or "global-settings")
-        path = f"/mgmt/tm/analytics/global-settings/~{part}~{nm}"
         body = {
             "externalLoggingPublisher": log_publisher_fullpath,
             "useHsl": "enabled",
             "useOffbox": "enabled",
         }
-        pr = self._patch(path, body)
-        if pr.status_code not in (200, 202):
-            raise BigIPError(
-                f"PATCH analytics global-settings failed ({pr.status_code}): {pr.text[:1200]}"
-            )
-        try:
-            return pr.json() if pr.text.strip() else {}
-        except json.JSONDecodeError:
-            return {}
+        deadline = time.time() + wait_for_items_timeout
+        last_snip = ""
+        while time.time() < deadline:
+            r = self._get("/mgmt/tm/analytics/global-settings")
+            if r.status_code != 200:
+                raise BigIPError(
+                    f"Cannot read /mgmt/tm/analytics/global-settings ({r.status_code}): {r.text[:800]}"
+                )
+            data = r.json() or {}
+            items = data.get("items")
+            if isinstance(items, list) and len(items) > 0:
+                item = items[0]
+                part = str(item.get("partition") or "Common")
+                nm = str(item.get("name") or "global-settings")
+                path = f"/mgmt/tm/analytics/global-settings/~{part}~{nm}"
+                pr = self._patch(path, body)
+                if pr.status_code not in (200, 202):
+                    raise BigIPError(
+                        f"PATCH analytics global-settings failed ({pr.status_code}): {pr.text[:1200]}"
+                    )
+                try:
+                    out = pr.json() if pr.text.strip() else {}
+                except json.JSONDecodeError:
+                    out = {}
+                if isinstance(out, dict):
+                    out["_avrPatchMode"] = "collection_item"
+                return out if isinstance(out, dict) else {"_avrPatchMode": "collection_item"}
+            last_snip = (r.text or "")[:500]
+            time.sleep(wait_interval)
+            try:
+                self.reauthenticate()
+            except BigIPError:
+                pass
+
+        last_err = last_snip or "(empty body)"
+        for label, uri in (
+            ("singleton", AVR_GLOBAL_SETTINGS_ITEM_DEFAULT),
+            ("collection_useHsl", "/mgmt/tm/analytics/global-settings"),
+        ):
+            pr = self._patch(uri, body)
+            if pr.status_code in (200, 202):
+                try:
+                    out = pr.json() if pr.text.strip() else {}
+                except json.JSONDecodeError:
+                    out = {}
+                if isinstance(out, dict):
+                    out["_avrPatchMode"] = label
+                return out if isinstance(out, dict) else {"_avrPatchMode": label}
+            last_err = pr.text[:1200]
+
+        raise BigIPError(
+            "Could not configure AVR analytics global-settings: "
+            f"GET had no items for {wait_for_items_timeout:.0f}s; "
+            f"fallback PATCHs also failed: {last_err}"
+        )
 
     def save_sys_config(self) -> dict[str, Any]:
         """REST equivalent of ``tmsh save sys config`` (persist running config to disk).

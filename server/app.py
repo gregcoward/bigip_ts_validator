@@ -202,8 +202,8 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
         except BigIPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if svc.get("http_analytics") or svc.get("tcp_analytics"):
+            pub = body.avr_log_publisher_fullpath or "/Common/Shared/telemetry_publisher"
             try:
-                pub = body.avr_log_publisher_fullpath or "/Common/Shared/telemetry_publisher"
                 avr_gs = s.client.configure_analytics_global_settings_for_avr(log_publisher_fullpath=pub)
                 steps.append(
                     {
@@ -218,7 +218,14 @@ def session_remediate(session_id: str, body: RemediateBody) -> dict[str, Any]:
                 except BigIPError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
             except BigIPError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
+                steps.append(
+                    {
+                        "step": "analytics_global_settings_avr",
+                        "log_publisher": pub,
+                        "status": "skipped",
+                        "warning": str(exc),
+                    }
+                )
 
     if body.post_ts:
         try:
