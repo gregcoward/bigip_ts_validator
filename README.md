@@ -1,4 +1,4 @@
-# BIG-IP-Telemetry-Streaming-Validator-and-Configurator
+# BIG-IP Telemetry Streaming Validator and Configurator
 Public
 
 Validate (and optionally remediate) a F5 BIG-IP for F5 Telemetry Streaming (TS)
