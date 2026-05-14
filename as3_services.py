@@ -162,8 +162,14 @@ def _security_log_profile(*, asm: bool, afm: bool) -> dict[str, Any] | None:
 
 
 def _needs_hsl_chain(services: dict[str, bool]) -> bool:
-    """Pool / HSL / formatted / publisher chain for LTM, AFM network logging, and DNS logging."""
-    return bool(services.get("ltm") or services.get("afm") or services.get("dns"))
+    """Pool / HSL / formatted / publisher chain for LTM, AFM, DNS, and AVR (HTTP/TCP analytics)."""
+    return bool(
+        services.get("ltm")
+        or services.get("afm")
+        or services.get("dns")
+        or services.get("http_analytics")
+        or services.get("tcp_analytics")
+    )
 
 
 def _build_shared_application(services: dict[str, bool], *, include_local_listener: bool) -> dict[str, Any]:
